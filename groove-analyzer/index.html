@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Groove Analyzer</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>Groove Analyzer</h1>
+    <div class="tag" id="header-tag">Find the Pocket</div>
+  </div>
+
+  <div class="phase-bar" style="display:none">
+    <div class="step" id="step1"></div>
+    <div class="step" id="step2"></div>
+    <div class="step" id="step3"></div>
+    <div class="step" id="step4"></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- HOME SCREEN                                -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="screen active" id="screen-home">
+    <div class="mode-card card" onclick="App.startClickMode()">
+      <div class="mode-card-header">
+        <span class="mode-icon">&#x2A09;</span>
+        <h2>Click Mode</h2>
+      </div>
+      <p>Play along with a click. Most accurate pocket analysis.</p>
+      <span class="mode-arrow">&rarr;</span>
+    </div>
+
+    <div class="mode-card card" onclick="App.startPlaygroundMode()">
+      <div class="mode-card-header">
+        <span class="mode-icon">&#x25CE;</span>
+        <h2>Pocket Playground</h2>
+      </div>
+      <p>Target a feel. The Questlove, The Pino, Driving Rock, and more.</p>
+      <span class="mode-arrow">&rarr;</span>
+    </div>
+
+    <div class="mode-card card" onclick="App.startFreePlayMode()">
+      <div class="mode-card-header">
+        <span class="mode-icon">&#x223F;</span>
+        <h2>Free Play</h2>
+      </div>
+      <p>No click. Just play. The app figures out your tempo and pocket.</p>
+      <span class="mode-arrow">&rarr;</span>
+    </div>
+
+    <button class="btn secondary" onclick="App.showHistory()" style="margin-top:8px">
+      View History
+    </button>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- CLICK MODE SETUP                           -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="screen" id="screen-setup">
+    <div class="card">
+      <h2>Set Your Tempo</h2>
+      <div class="tempo-control">
+        <button class="tempo-btn" onclick="App.changeTempo(-1)">&minus;</button>
+        <div class="tempo-display">
+          <div class="bpm" id="tempo-value" onclick="App.editTempo('tempo-value')">90</div>
+          <div class="label">BPM</div>
+        </div>
+        <button class="tempo-btn" onclick="App.changeTempo(1)">+</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Sound Check</h2>
+      <p>Put on headphones, then tap below. Play a few notes &mdash; the green bar should jump when you play and stay low when silent.</p>
+      <button class="btn secondary" id="sc-btn" onclick="App.startSoundCheck()">Start Sound Check</button>
+      <div id="sc-panel" style="display:none">
+        <div class="level-section">
+          <div class="level-label"><span>Mic level</span><span id="lv-val">0</span></div>
+          <div class="level-bar-bg">
+            <div class="level-bar" id="lv-bar"></div>
+            <div class="threshold-line" id="th-mark" style="left:30%"></div>
+          </div>
+        </div>
+        <div class="slider-row">
+          <label>Sensitivity</label>
+          <input type="range" min="1" max="70" value="8" id="sens-sl" oninput="App.updateSensitivity()">
+          <div class="val" id="sens-v">30</div>
+        </div>
+        <p style="font-size:11px;color:var(--text-tertiary);margin-top:8px">
+          The bar should cross the yellow line ONLY when you play. Adjust the slider until it's right.
+        </p>
+        <div id="sc-hits" style="font-size:12px;color:var(--teal);margin-top:8px;min-height:18px"></div>
+      </div>
+    </div>
+    <div class="notice">Headphones essential &mdash; click must not leak into the mic.</div>
+    <button class="btn primary" id="go-btn" onclick="App.startCalibration()" disabled>Complete sound check first</button>
+    <p class="helper">Play a few notes to enable the button</p>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- POCKET PLAYGROUND — TARGET SELECTION       -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="screen" id="screen-pg-select">
+    <div class="card" style="padding:16px 20px">
+      <p style="margin:0;font-size:13px;color:var(--text-secondary)">Choose a pocket to target. Ordered from ahead of the beat to deep behind.</p>
+    </div>
+    <div id="pg-targets"></div>
+    <button class="btn secondary" onclick="App.goHome()" style="margin-top:12px">Back</button>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- POCKET PLAYGROUND — SETUP                  -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="screen" id="screen-pg-setup">
+    <div class="card">
+      <div class="pg-setup-target">
+        <h2 id="pg-target-title"></h2>
+        <p id="pg-target-desc-text" style="margin-bottom:4px"></p>
+        <p style="font-size:12px;color:var(--text-tertiary);font-style:italic;margin-bottom:12px" id="pg-target-reference"></p>
+        <div class="notice" style="background:rgba(139,127,212,0.08);border-color:rgba(139,127,212,0.2);color:var(--purple)">
+          <span id="pg-target-range"></span>
+        </div>
+      </div>
+      <h2 style="margin-top:8px">Set Your Tempo</h2>
+      <div class="tempo-control">
+        <button class="tempo-btn" onclick="App.changePlaygroundTempo(-1)">&minus;</button>
+        <div class="tempo-display">
+          <div class="bpm" id="pg-tempo-value" onclick="App.editTempo('pg-tempo-value')">90</div>
+          <div class="label">BPM</div>
+        </div>
+        <button class="tempo-btn" onclick="App.changePlaygroundTempo(1)">+</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Sound Check</h2>
+      <p>Put on headphones, then tap below. Play a few notes.</p>
+      <button class="btn secondary" id="pg-sc-btn" onclick="App.startSoundCheck()">Start Sound Check</button>
+      <div id="pg-sc-panel" style="display:none">
+        <div class="level-section">
+          <div class="level-label"><span>Mic level</span><span id="pg-lv-val">0</span></div>
+          <div class="level-bar-bg">
+            <div class="level-bar" id="pg-lv-bar"></div>
+            <div class="threshold-line" id="pg-th-mark" style="left:30%"></div>
+          </div>
+        </div>
+        <div class="slider-row">
+          <label>Sensitivity</label>
+          <input type="range" min="1" max="70" value="8" id="pg-sens-sl" oninput="App.updatePgSensitivity()">
+          <div class="val" id="pg-sens-v">30</div>
+        </div>
+        <p style="font-size:11px;color:var(--text-tertiary);margin-top:8px">
+          The bar should cross the yellow line ONLY when you play.
+        </p>
+        <div id="pg-sc-hits" style="font-size:12px;color:var(--teal);margin-top:8px;min-height:18px"></div>
+      </div>
+    </div>
+    <div class="notice">Headphones essential &mdash; click must not leak into the mic.</div>
+    <button class="btn primary" id="pg-go-btn" onclick="App.startPlaygroundCalibration()" disabled>Complete sound check first</button>
+    <p class="helper">Play a few notes to enable the button</p>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- FREE PLAY SETUP                            -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="screen" id="screen-fp-setup">
+    <div class="card">
+      <h2>Free Play</h2>
+      <p>No click. Just play and the app figures out your tempo and pocket. Play for at least 15 seconds.</p>
+      <div class="setup-tips">
+        <p>To analyze a song, play it from another device near your mic.</p>
+        <p><strong>Place your phone/mic right next to the speaker.</strong> Even a few feet of distance introduces room reflections that shift timing by 10&ndash;15ms &mdash; enough to change your results.</p>
+        <p>Use a full-range speaker, not a phone speaker. Phone speakers lack bass, so kick drum and bass guitar onsets won&rsquo;t be detected reliably.</p>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Sound Check</h2>
+      <p>Tap below, then play a few notes.</p>
+      <button class="btn secondary" id="fp-sc-btn" onclick="App.startSoundCheck()">Start Sound Check</button>
+      <div id="fp-sc-panel" style="display:none">
+        <div class="level-section">
+          <div class="level-label"><span>Mic level</span><span id="fp-lv-val">0</span></div>
+          <div class="level-bar-bg">
+            <div class="level-bar" id="fp-lv-bar"></div>
+            <div class="threshold-line" id="fp-th-mark" style="left:30%"></div>
+          </div>
+        </div>
+        <div class="slider-row">
+          <label>Sensitivity</label>
+          <input type="range" min="1" max="70" value="8" id="fp-sens-sl" oninput="App.updateFpSensitivity()">
+          <div class="val" id="fp-sens-v">30</div>
+        </div>
+        <p style="font-size:11px;color:var(--text-tertiary);margin-top:8px">
+          The bar should cross the yellow line ONLY when you play.
+        </p>
+        <div id="fp-sc-hits" style="font-size:12px;color:var(--teal);margin-top:8px;min-height:18px"></div>
+      </div>
+    </div>
+    <button class="btn primary" id="fp-go-btn" onclick="App.startFreePlayGo()" disabled>Complete sound check first</button>
+    <p class="helper">Play a few notes to enable the button</p>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- CALIBRATION (Click + Playground shared)    -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="screen" id="screen-cal">
+    <div class="card">
+      <h2>Calibration</h2>
+      <p>Play one note per beat, right on the click, as tight as you can.</p>
+    </div>
+    <div class="cal-center">
+      <div class="cal-ring"><div class="inner">Play on<br>the beat</div></div>
+      <div class="cal-count" id="cc">0</div>
+      <div class="cal-info" id="ci">Need 16 hits...</div>
+    </div>
+    <button class="btn primary" id="cb" onclick="App.finishCalibration()" disabled>Waiting...</button>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- PLAYING (Click + Playground shared)        -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="screen" id="screen-play">
+    <div class="play-center">
+      <div class="play-pulse" id="pp"></div>
+      <div class="play-time" id="pt">0:00</div>
+      <button class="stop-btn" onclick="App.stopSession()"><div class="sq"></div></button>
+      <div class="play-stats" id="ps">0 hits</div>
+      <div class="play-last-hit" id="plh"></div>
+    </div>
+    <div class="level-section" style="margin:0 16px">
+      <div class="level-bar-bg">
+        <div class="level-bar" id="plv"></div>
+        <div class="threshold-line" id="pth" style="left:30%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- FREE PLAY RECORDING                        -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="screen" id="screen-fp-rec">
+    <div class="play-center">
+      <div class="rec-ring">
+        <div class="rec-dot"></div>
+      </div>
+      <div class="fp-live-bpm-display">
+        <div class="fp-listening" id="fp-listening">
+          <div class="fp-listening-pulse" id="fp-listening-pulse"></div>
+          <div class="fp-listening-text">Listening...</div>
+        </div>
+        <div class="fp-bpm-result" id="fp-bpm-result" style="display:none">
+          <div class="fp-live-bpm-value" id="fp-live-bpm">&mdash;</div>
+          <div class="fp-live-bpm-label">BPM</div>
+        </div>
+      </div>
+      <div class="play-time" id="fp-pt">0:00</div>
+      <button class="stop-btn" onclick="App.stopFreePlayRecording()"><div class="sq"></div></button>
+      <div class="play-stats" id="fp-ps">0 onsets detected</div>
+      <p class="helper" style="margin-top:8px">Play for at least 15 seconds for best results</p>
+    </div>
+    <div class="level-section" style="margin:0 16px">
+      <div class="level-bar-bg">
+        <div class="level-bar" id="fp-plv"></div>
+        <div class="threshold-line" id="fp-pth" style="left:30%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- RESULTS (shared across all modes)          -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="screen" id="screen-res">
+    <div class="feel-line" id="fl"></div>
+    <div id="target-label" class="target-result-label" style="display:none"></div>
+
+    <div class="results-dashboard">
+      <!-- ROW 1: Pocket Landing + Metrics -->
+      <div class="results-row results-row--summary">
+        <div class="pocket-landing">
+          <h3>Pocket Landing</h3>
+          <div class="pocket-track"><canvas id="pc"></canvas></div>
+        </div>
+        <div class="results-summary-right">
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <div class="val" id="mp">&mdash;</div>
+              <div class="lbl">Position</div>
+              <div class="ctx" id="mpc"></div>
+            </div>
+            <div class="metric-card">
+              <div class="val" id="mc">&mdash;</div>
+              <div class="lbl">Consistency</div>
+              <div class="ctx" id="mcc"></div>
+            </div>
+            <div class="metric-card">
+              <div class="val" id="mb">&mdash;</div>
+              <div class="lbl">Tempo</div>
+              <div class="ctx" id="mbc"></div>
+            </div>
+            <div class="metric-card" id="swing-card" style="display:none">
+              <div class="val" id="ms">&mdash;</div>
+              <div class="lbl">Swing</div>
+              <div class="ctx" id="msc"></div>
+            </div>
+          </div>
+          <div class="tempo-override" id="tempo-override" style="display:none">
+            <span class="tempo-override-label">Detected BPM wrong?</span>
+            <button class="btn secondary tempo-override-btn" onclick="App.editFreePlayTempo()">Override</button>
+          </div>
+          <div class="breakdown-row" id="breakdown-row" style="display:none">
+            <div class="breakdown-card card">
+              <div class="breakdown-title">Downbeats</div>
+              <div class="breakdown-val" id="bd-val"></div>
+              <div class="breakdown-count" id="bd-count"></div>
+            </div>
+            <div class="breakdown-card card">
+              <div class="breakdown-title">Ghost Notes</div>
+              <div class="breakdown-val" id="gn-val"></div>
+              <div class="breakdown-count" id="gn-count"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ROW 2: Tempo Curve (full width) -->
+      <div class="scatter-section" id="tempo-curve-section" style="display:none">
+        <h3>Tempo Curve</h3>
+        <canvas class="scatter-canvas" id="tc-canvas"></canvas>
+      </div>
+
+      <!-- ROW 3: Session Timeline (full width) -->
+      <div class="scatter-section">
+        <h3>Session Timeline — All Instruments</h3>
+        <canvas class="scatter-canvas" id="sc2"></canvas>
+      </div>
+
+      <!-- ROW 4+: Per-band rows (card + timeline side by side) -->
+      <div class="band-rows-section" id="band-analysis-section" style="display:none">
+        <h3>Frequency Band Analysis</h3>
+        <div id="band-rows-container"></div>
+      </div>
+    </div>
+
+    <details class="raw-data">
+      <summary>Raw data</summary>
+      <pre id="rp"></pre>
+    </details>
+    <div id="session-saved" class="session-saved">Session saved</div>
+    <div class="actions-row">
+      <button class="btn primary" onclick="App.playAgain()">Play Again</button>
+      <button class="btn secondary" onclick="App.resetAll()">New Session</button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- HISTORY                                    -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="screen" id="screen-history">
+    <div id="history-summary"></div>
+    <div class="scatter-section" id="progress-chart-section" style="display:none">
+      <h3>Progress</h3>
+      <canvas class="scatter-canvas" id="progress-canvas"></canvas>
+    </div>
+    <div id="history-list"></div>
+    <button class="btn secondary" onclick="App.goHome()" style="margin-top:16px">Back</button>
+  </div>
+</div>
+
+<!-- Scripts loaded in dependency order -->
+<script src="js/audio.js"></script>
+<script src="js/onset-detector.js"></script>
+<script src="js/grid.js"></script>
+<script src="js/analysis.js"></script>
+<script src="js/tempo-estimator.js"></script>
+<script src="js/grid-estimator.js"></script>
+<script src="js/adaptive-grid.js"></script>
+<script src="js/flux-tempo.js"></script>
+<script src="js/metric-selector.js"></script>
+<script src="js/feedback.js"></script>
+<script src="js/visualizations.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/pocket-targets.js"></script>
+
+<!-- Essentia.js WASM — beat tracking for Free Play mode -->
+<script src="https://cdn.jsdelivr.net/npm/essentia.js@0.1.3/dist/essentia-wasm.web.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/essentia.js@0.1.3/dist/essentia.js-core.js"></script>
+
+<script src="js/app.js"></script>
+</body>
+</html>
