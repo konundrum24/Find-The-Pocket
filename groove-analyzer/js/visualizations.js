@@ -201,7 +201,7 @@ const Visualizations = (() => {
    * Shows onset distribution, average marker, and spread ellipse in band color.
    */
   function drawBandPocketLanding(canvas, onsets, bandName, avg, sd) {
-    const H = 50;
+    const H = window.innerWidth < 900 ? 44 : 50;
     const { ctx: x, W } = setupCanvas(canvas, H);
     if (!onsets || !onsets.length) return;
 
@@ -278,7 +278,8 @@ const Visualizations = (() => {
    * Supports beat position visual distinction when onsets have classification.
    */
   function drawTimeline(canvas, onsets) {
-    const { ctx: x, W, H } = setupCanvas(canvas, 150);
+    const mobileH = window.innerWidth < 900 ? 120 : 150;
+    const { ctx: x, W, H } = setupCanvas(canvas, mobileH);
     if (!onsets.length) return;
 
     const hasClassification = onsets[0].isDownbeat !== undefined;
@@ -424,7 +425,8 @@ const Visualizations = (() => {
    * Draw the Tempo Curve chart (Free Play).
    */
   function drawTempoCurve(canvas, curve, avgBpm) {
-    const { ctx: x, W, H } = setupCanvas(canvas, 120);
+    const mobileH = window.innerWidth < 900 ? 100 : 120;
+    const { ctx: x, W, H } = setupCanvas(canvas, mobileH);
     if (!curve || curve.length < 2) return;
 
     const pL = 40, pR = 10, pT = 10, pB = 24;
