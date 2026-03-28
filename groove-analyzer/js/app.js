@@ -552,30 +552,13 @@ const App = (() => {
 
     // Click Mode / Playground: find nearest grid point
     if (mode === 'calibrating') {
-      // Calibration uses quarter-note grid only
+      // Auto-calibration: match detected onset to nearest click grid point
       const gridTimes = Grid.getGridTimes();
       const result = Analysis.computeOffset(timeMs, gridTimes);
       if (!result) return;
       if (result.distance > Analysis.maxOffsetMs(msPerBeat())) return;
       calibrationOffsets.push(result.offset);
-      const n = calibrationOffsets.length;
-      document.getElementById('cc').textContent = n;
-
-      if (n >= 16) {
-        const sorted = [...calibrationOffsets].sort((a, b) => a - b);
-        const trimCount = Math.max(1, Math.floor(sorted.length * 0.15));
-        const trimmed = sorted.slice(trimCount, sorted.length - trimCount);
-        const avg = trimmed.reduce((a, b) => a + b, 0) / trimmed.length;
-        const sd = Math.sqrt(trimmed.reduce((a, b) => a + (b - avg) ** 2, 0) / trimmed.length);
-        const med = trimmed[Math.floor(trimmed.length / 2)];
-
-        document.getElementById('ci').textContent =
-          `Latency: ${Math.round(med)}ms | Spread: \u00b1${Math.round(sd)}ms`;
-        document.getElementById('cb').disabled = false;
-        document.getElementById('cb').textContent = 'Calibration Complete \u2014 Continue';
-      } else {
-        document.getElementById('ci').textContent = `Need ${16 - n} more...`;
-      }
+      document.getElementById('cc').textContent = calibrationOffsets.length + ' clicks detected';
       return;
     }
 
@@ -635,25 +618,78 @@ const App = (() => {
     startMainLoop();
   }
 
-  // ── Calibration (Click Mode + Playground) ──
-  function startCalibration() {
+  // ── Auto-Calibration (Click Mode + Playground) ──
+  // Plays clicks through speakers, listens for them through the mic,
+  // and measures the round-trip latency. No user interaction required.
+  function startAutoCalibration() {
     mode = 'calibrating';
     calibrationOffsets = [];
-    document.getElementById('cc').textContent = '0';
-    document.getElementById('ci').textContent = 'Need 16 hits...';
-    document.getElementById('cb').disabled = true;
-    document.getElementById('cb').textContent = 'Waiting...';
-    OnsetDetector.setCooldown(Analysis.cooldownSamples(msPerBeat(), Audio.getSampleRate()));
+
     showScreen('screen-cal');
+    document.getElementById('cc').textContent = '';
+    document.getElementById('ci').textContent = 'Measuring system latency...';
+    document.getElementById('cb').disabled = true;
+    document.getElementById('cb').style.display = 'none';
+
+    // Use quarter-note cooldown for clear click separation
+    OnsetDetector.setCooldown(Analysis.cooldownSamples(msPerBeat(), Audio.getSampleRate()));
+    OnsetDetector.setActive(true);
     Grid.startClick(tempo, Audio.getContext());
+
+    // Auto-calibration collects onsets through handleOnset() in calibrating mode.
+    // The existing calibrating handler in handleOnset() matches onsets to the grid.
+    startMainLoop();
+
+    // Monitor progress and auto-finish when enough clicks are detected
+    const calStartTime = Audio.getContext().currentTime * 1000;
+    const calCheckInterval = setInterval(() => {
+      const elapsed = Audio.getContext().currentTime * 1000 - calStartTime;
+      const clickCount = calibrationOffsets.length;
+
+      // Need at least 4 clicks and 2+ seconds elapsed
+      if (clickCount >= 4 && elapsed > 2000) {
+        clearInterval(calCheckInterval);
+        finishAutoCalibration();
+      } else if (elapsed > 6000) {
+        // Timeout — proceed with whatever we have or 0
+        clearInterval(calCheckInterval);
+        if (clickCount >= 2) {
+          finishAutoCalibration();
+        } else {
+          console.warn('[Groove] Auto-calibration: not enough clicks detected, using 0ms latency');
+          latencyOffset = 0;
+          Grid.stopClick();
+          OnsetDetector.setActive(false);
+          startSession();
+        }
+      }
+    }, 100);
+  }
+
+  function finishAutoCalibration() {
+    Grid.stopClick();
+    OnsetDetector.setActive(false);
+    OnsetDetector.reset(); // Clear calibration data before session
+    mode = 'idle';
+
+    // Use trimmed median for robustness (same as old manual calibration)
+    latencyOffset = Analysis.computeLatencyOffset(calibrationOffsets);
+    console.log('[Groove] Auto-calibration: latency = ' + latencyOffset.toFixed(1) +
+      'ms (' + calibrationOffsets.length + ' clicks)');
+    document.getElementById('ci').textContent =
+      'Latency: ' + Math.round(latencyOffset) + 'ms';
+
+    // Brief pause to show result, then start session
+    setTimeout(() => startSession(), 400);
+  }
+
+  // Keep manual calibration as fallback (exposed but not in default flow)
+  function startCalibration() {
+    startAutoCalibration();
   }
 
   function finishCalibration() {
-    mode = 'idle';
-    Grid.stopClick();
-    latencyOffset = Analysis.computeLatencyOffset(calibrationOffsets);
-    console.log('Latency offset:', latencyOffset.toFixed(1) + 'ms');
-    startSession();
+    // No-op — auto-calibration handles its own finish
   }
 
   // ── Click / Playground Session ──
@@ -709,35 +745,10 @@ const App = (() => {
     const durationMs = sessionOnsets.length > 0
       ? sessionOnsets[sessionOnsets.length - 1].time : 0;
 
-    // ── Phase Correction ──
-    // Step 1: Use raw (pre-latency) offsets to compute the circular mean phase error.
-    // This captures both the arbitrary start-time phase AND the system latency
-    // in a single correction, making explicit latency calibration unnecessary.
-    const rawOffsets = sessionOnsets.map(o => o.raw != null ? o.raw : o.offset);
-    const phaseCorrection = Analysis.computePhaseCorrection(rawOffsets, grid.gridUnitMs);
-
-    // Step 2: Re-match all onsets to the phase-corrected grid.
-    // This ensures onsets snap to the correct grid point even when the
-    // phase error was large enough to shift them to an adjacent subdivision.
-    const correctedOnsets = Analysis.rematchWithPhaseCorrection(
-      sessionOnsets, grid, phaseCorrection, sessionStartTime
-    );
-
-    if (correctedOnsets.length < 6) {
-      alert(`Only ${correctedOnsets.length} hits matched after phase correction. Try playing louder or adjusting sensitivity.`);
-      return;
-    }
-
-    console.log('[Groove] Phase correction: ' + phaseCorrection.toFixed(1) + 'ms ' +
-      '(raw offsets had mean ' + (rawOffsets.reduce((a, b) => a + b, 0) / rawOffsets.length).toFixed(1) + 'ms)');
-
-    // ── Classification & Metrics (using phase-corrected onsets) ──
-    const correctedGrid = {
-      ...grid,
-      points: grid.points.map(p => p + phaseCorrection)
-    };
-
-    const classifiedOnsets = Analysis.classifyOnsets(correctedOnsets, correctedGrid);
+    // Click Mode: the click grid IS the beat reference.
+    // Latency offset from auto-calibration is already subtracted in handleOnset().
+    // The remaining offset is the musician's genuine feel — do NOT phase-correct it away.
+    const classifiedOnsets = Analysis.classifyOnsets(sessionOnsets, grid);
     const weightedMetrics = Analysis.computeWeightedMetrics(classifiedOnsets, grid.gridUnitMs);
 
     // Determine if subdivisions are present (<80% downbeats)
@@ -760,7 +771,7 @@ const App = (() => {
         feelLine = Feedback.generateSubdivisionFeelLine(weightedMetrics, tempo, 0);
       }
     } else {
-      const metrics = Analysis.computeSessionMetrics(correctedOnsets, msPerBeat(), tempo);
+      const metrics = Analysis.computeSessionMetrics(sessionOnsets, msPerBeat(), tempo);
       avgOffset = metrics.avgOffset;
       stdDev = metrics.stdDev;
       downbeatMetrics = null;
@@ -775,8 +786,8 @@ const App = (() => {
       }
     }
 
-    // Run diagnostics on the corrected data
-    const diagReport = Diagnostics.analyze(classifiedOnsets, correctedGrid, tempo, latencyOffset);
+    // Run diagnostics (no phase correction in Click Mode)
+    const diagReport = Diagnostics.analyze(classifiedOnsets, grid, tempo, latencyOffset);
 
     const session = Storage.buildSessionObject({
       mode: appMode === 'playground' ? 'playground' : 'click',
@@ -787,7 +798,7 @@ const App = (() => {
       stdDev,
       bpmStdDev: 0,
       avgBpm: tempo,
-      hitCount: hasSubdivisions ? weightedMetrics.onsetCount : correctedOnsets.length,
+      hitCount: hasSubdivisions ? weightedMetrics.onsetCount : sessionOnsets.length,
       durationMs,
       offsets: classifiedOnsets.map(o => o.offset),
       onsets: classifiedOnsets,
@@ -804,7 +815,6 @@ const App = (() => {
     // Attach diagnostics (not persisted to storage, just for display)
     session._diagnostics = diagReport;
     session._gridUnitMs = grid.gridUnitMs;
-    session._phaseCorrection = phaseCorrection;
 
     Storage.saveSession(session);
     renderResults(session);

@@ -206,15 +206,15 @@
   <!-- ══════════════════════════════════════════ -->
   <div class="screen" id="screen-cal">
     <div class="card">
-      <h2>Calibration</h2>
-      <p>Play one note per beat, right on the click, as tight as you can.</p>
+      <h2>Auto-Calibrating</h2>
+      <p>Measuring system latency by listening to the click through your mic...</p>
     </div>
     <div class="cal-center">
-      <div class="cal-ring"><div class="inner">Play on<br>the beat</div></div>
-      <div class="cal-count" id="cc">0</div>
-      <div class="cal-info" id="ci">Need 16 hits...</div>
+      <div class="cal-ring"><div class="inner">Listening<br>to click</div></div>
+      <div class="cal-count" id="cc"></div>
+      <div class="cal-info" id="ci">Measuring system latency...</div>
     </div>
-    <button class="btn primary" id="cb" onclick="App.finishCalibration()" disabled>Waiting...</button>
+    <button class="btn primary" id="cb" onclick="App.finishCalibration()" style="display:none">Waiting...</button>
   </div>
 
   <!-- ══════════════════════════════════════════ -->
