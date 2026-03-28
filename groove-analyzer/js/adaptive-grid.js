@@ -326,12 +326,35 @@ const AdaptiveGrid = (() => {
     return sorted[Math.floor(sorted.length / 2)];
   }
 
+  /**
+   * Shift all grid point times by a phase correction.
+   * Returns a new grid object with shifted times (does not mutate original).
+   */
+  function shiftGridPhase(grid, correctionMs) {
+    return {
+      ...grid,
+      points: grid.points.map(p => ({
+        ...p,
+        time: p.time + correctionMs
+      })),
+      anchors: grid.anchors.map(a => ({
+        ...a,
+        time: a.time + correctionMs
+      })),
+      localTempos: grid.localTempos.map(lt => ({
+        ...lt,
+        time: lt.time + correctionMs
+      }))
+    };
+  }
+
   return {
     findAnchors,
     findPeriodicPulse,
     pulseToAnchors,
     buildAdaptiveGrid,
     matchToAdaptiveGrid,
+    shiftGridPhase,
     getTempoFromAnchors,
     getGlobalBpm
   };

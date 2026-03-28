@@ -709,8 +709,35 @@ const App = (() => {
     const durationMs = sessionOnsets.length > 0
       ? sessionOnsets[sessionOnsets.length - 1].time : 0;
 
-    // Classify onsets by beat position using the 16th-note grid
-    const classifiedOnsets = Analysis.classifyOnsets(sessionOnsets, grid);
+    // ── Phase Correction ──
+    // Step 1: Use raw (pre-latency) offsets to compute the circular mean phase error.
+    // This captures both the arbitrary start-time phase AND the system latency
+    // in a single correction, making explicit latency calibration unnecessary.
+    const rawOffsets = sessionOnsets.map(o => o.raw != null ? o.raw : o.offset);
+    const phaseCorrection = Analysis.computePhaseCorrection(rawOffsets, grid.gridUnitMs);
+
+    // Step 2: Re-match all onsets to the phase-corrected grid.
+    // This ensures onsets snap to the correct grid point even when the
+    // phase error was large enough to shift them to an adjacent subdivision.
+    const correctedOnsets = Analysis.rematchWithPhaseCorrection(
+      sessionOnsets, grid, phaseCorrection, sessionStartTime
+    );
+
+    if (correctedOnsets.length < 6) {
+      alert(`Only ${correctedOnsets.length} hits matched after phase correction. Try playing louder or adjusting sensitivity.`);
+      return;
+    }
+
+    console.log('[Groove] Phase correction: ' + phaseCorrection.toFixed(1) + 'ms ' +
+      '(raw offsets had mean ' + (rawOffsets.reduce((a, b) => a + b, 0) / rawOffsets.length).toFixed(1) + 'ms)');
+
+    // ── Classification & Metrics (using phase-corrected onsets) ──
+    const correctedGrid = {
+      ...grid,
+      points: grid.points.map(p => p + phaseCorrection)
+    };
+
+    const classifiedOnsets = Analysis.classifyOnsets(correctedOnsets, correctedGrid);
     const weightedMetrics = Analysis.computeWeightedMetrics(classifiedOnsets, grid.gridUnitMs);
 
     // Determine if subdivisions are present (<80% downbeats)
@@ -720,7 +747,6 @@ const App = (() => {
     let feelLine, avgOffset, stdDev, downbeatMetrics, subdivisionMetrics, density, densityLabel;
 
     if (hasSubdivisions && weightedMetrics) {
-      // Subdivision-aware: use amplitude-weighted metrics
       avgOffset = weightedMetrics.position;
       stdDev = weightedMetrics.consistency;
       downbeatMetrics = weightedMetrics.downbeats;
@@ -734,8 +760,7 @@ const App = (() => {
         feelLine = Feedback.generateSubdivisionFeelLine(weightedMetrics, tempo, 0);
       }
     } else {
-      // Mostly quarter notes: use simple metrics
-      const metrics = Analysis.computeSessionMetrics(sessionOnsets, msPerBeat(), tempo);
+      const metrics = Analysis.computeSessionMetrics(correctedOnsets, msPerBeat(), tempo);
       avgOffset = metrics.avgOffset;
       stdDev = metrics.stdDev;
       downbeatMetrics = null;
@@ -750,8 +775,8 @@ const App = (() => {
       }
     }
 
-    // Run grid accuracy diagnostics
-    const diagReport = Diagnostics.analyze(classifiedOnsets, grid, tempo, latencyOffset);
+    // Run diagnostics on the corrected data
+    const diagReport = Diagnostics.analyze(classifiedOnsets, correctedGrid, tempo, latencyOffset);
 
     const session = Storage.buildSessionObject({
       mode: appMode === 'playground' ? 'playground' : 'click',
@@ -762,7 +787,7 @@ const App = (() => {
       stdDev,
       bpmStdDev: 0,
       avgBpm: tempo,
-      hitCount: hasSubdivisions ? weightedMetrics.onsetCount : sessionOnsets.length,
+      hitCount: hasSubdivisions ? weightedMetrics.onsetCount : correctedOnsets.length,
       durationMs,
       offsets: classifiedOnsets.map(o => o.offset),
       onsets: classifiedOnsets,
@@ -779,6 +804,7 @@ const App = (() => {
     // Attach diagnostics (not persisted to storage, just for display)
     session._diagnostics = diagReport;
     session._gridUnitMs = grid.gridUnitMs;
+    session._phaseCorrection = phaseCorrection;
 
     Storage.saveSession(session);
     renderResults(session);
@@ -956,15 +982,32 @@ const App = (() => {
     console.log('[Groove] final displayed BPM:', Math.round(globalBpm));
     tempo = globalBpm;
 
-    // Match onsets to adaptive grid (returns already-classified onsets)
-    const classifiedOnsets = AdaptiveGrid.matchToAdaptiveGrid(sessionOnsets, grid);
+    // ── Phase Correction ──
+    // Step 1: Initial match to get raw offsets for phase estimation
+    const initialMatch = AdaptiveGrid.matchToAdaptiveGrid(sessionOnsets, grid);
 
-    if (classifiedOnsets.length < 6) {
+    if (initialMatch.length < 6) {
       alert('Not enough onsets matched to grid. Try a more rhythmic pattern.');
       return null;
     }
 
-    const weightedMetrics = Analysis.computeWeightedMetrics(classifiedOnsets, grid.medianGridUnitMs);
+    // Step 2: Compute phase correction from initial offsets
+    const rawOffsets = initialMatch.map(o => o.offset);
+    const phaseCorrection = Analysis.computePhaseCorrection(rawOffsets, grid.medianGridUnitMs);
+
+    // Step 3: Shift grid and re-match
+    const correctedGrid = AdaptiveGrid.shiftGridPhase(grid, phaseCorrection);
+    const classifiedOnsets = AdaptiveGrid.matchToAdaptiveGrid(sessionOnsets, correctedGrid);
+
+    console.log('[Groove] Phase correction: ' + phaseCorrection.toFixed(1) + 'ms ' +
+      '(raw offsets had mean ' + (rawOffsets.reduce((a, b) => a + b, 0) / rawOffsets.length).toFixed(1) + 'ms)');
+
+    if (classifiedOnsets.length < 6) {
+      alert('Not enough onsets matched after phase correction. Try a more rhythmic pattern.');
+      return null;
+    }
+
+    const weightedMetrics = Analysis.computeWeightedMetrics(classifiedOnsets, correctedGrid.medianGridUnitMs);
 
     // Swing factor
     const swingResult = Analysis.computeSwingFactor(classifiedOnsets);
@@ -973,7 +1016,7 @@ const App = (() => {
     }
 
     // ── Per-band analysis ──
-    // Match each frequency band's onsets against the same adaptive grid
+    // Match each frequency band's onsets against the phase-corrected grid
     const bandOnsets = OnsetDetector.getBandOnsets();
     const bands = OnsetDetector.getBands();
     const bandAnalysis = [];
@@ -991,8 +1034,8 @@ const App = (() => {
         amplitude: o.amplitude
       }));
 
-      // Match to the adaptive grid
-      const matched = AdaptiveGrid.matchToAdaptiveGrid(normalizedOnsets, grid);
+      // Match to the phase-corrected adaptive grid
+      const matched = AdaptiveGrid.matchToAdaptiveGrid(normalizedOnsets, correctedGrid);
       if (matched.length < 4) {
         bandAnalysis.push({ name: band.name, label: band.label, count: matched.length });
         continue;
@@ -1017,7 +1060,7 @@ const App = (() => {
     }
 
     // Tempo curve from anchor intervals (smoothed)
-    let tempoCurve = AdaptiveGrid.getTempoFromAnchors(grid);
+    let tempoCurve = AdaptiveGrid.getTempoFromAnchors(correctedGrid);
 
     const durationMs = sessionOnsets.length > 0
       ? sessionOnsets[sessionOnsets.length - 1].time : 0;
@@ -1034,11 +1077,11 @@ const App = (() => {
       weightedMetrics, globalBpm, tempoBpmStdDev
     );
 
-    // Run diagnostics on adaptive grid (construct compatible grid object)
+    // Run diagnostics on the corrected grid
     const diagGrid = {
-      points: grid.points.map(p => p.time),
-      gridUnitMs: grid.medianGridUnitMs,
-      beatMs: grid.medianBeatMs,
+      points: correctedGrid.points.map(p => p.time),
+      gridUnitMs: correctedGrid.medianGridUnitMs,
+      beatMs: correctedGrid.medianBeatMs,
       subdivisions: 4
     };
     const diagReport = Diagnostics.analyze(classifiedOnsets, diagGrid, globalBpm, null);
@@ -1068,7 +1111,8 @@ const App = (() => {
     });
 
     session._diagnostics = diagReport;
-    session._gridUnitMs = grid.medianGridUnitMs;
+    session._gridUnitMs = correctedGrid.medianGridUnitMs;
+    session._phaseCorrection = phaseCorrection;
 
     return session;
   }
@@ -1083,12 +1127,30 @@ const App = (() => {
 
     const grid = GridEstimator.buildGrid(freePlayOnsetTimes, bpm, 4);
 
-    const matchedOnsets = [];
+    // Initial match for phase estimation
+    const initialMatch = [];
     for (const onset of sessionOnsets) {
       const onsetTimeMs = onset.time + sessionStartTime;
       const result = Analysis.computeOffset(onsetTimeMs, grid.points);
       if (!result) continue;
       if (result.distance > Analysis.maxSubdivisionOffsetMs(grid.gridUnitMs)) continue;
+      initialMatch.push(result.offset);
+    }
+
+    // Phase correction
+    const phaseCorrection = Analysis.computePhaseCorrection(initialMatch, grid.gridUnitMs);
+    const correctedGrid = {
+      ...grid,
+      points: grid.points.map(p => p + phaseCorrection)
+    };
+
+    // Re-match to corrected grid
+    const matchedOnsets = [];
+    for (const onset of sessionOnsets) {
+      const onsetTimeMs = onset.time + sessionStartTime;
+      const result = Analysis.computeOffset(onsetTimeMs, correctedGrid.points);
+      if (!result) continue;
+      if (result.distance > Analysis.maxSubdivisionOffsetMs(correctedGrid.gridUnitMs)) continue;
       matchedOnsets.push({
         time: onset.time,
         offset: result.offset,
@@ -1102,8 +1164,8 @@ const App = (() => {
       return null;
     }
 
-    const classifiedOnsets = Analysis.classifyOnsets(matchedOnsets, grid);
-    const weightedMetrics = Analysis.computeWeightedMetrics(classifiedOnsets, grid.gridUnitMs);
+    const classifiedOnsets = Analysis.classifyOnsets(matchedOnsets, correctedGrid);
+    const weightedMetrics = Analysis.computeWeightedMetrics(classifiedOnsets, correctedGrid.gridUnitMs);
 
     const tempoCurve = TempoEstimator.computeTempoCurve(classifiedOnsets, bpm);
 
@@ -1404,12 +1466,14 @@ const App = (() => {
       bandSection.style.display = 'none';
     }
 
-    // Diagnostics panel (Click / Playground mode)
+    // Diagnostics panel
     const diagSection = document.getElementById('diagnostics-section');
     const diagContent = document.getElementById('diagnostics-content');
     if (session._diagnostics && diagSection && diagContent) {
       diagSection.style.display = '';
-      diagContent.innerHTML = Diagnostics.renderPanel(session._diagnostics, session._gridUnitMs);
+      diagContent.innerHTML = Diagnostics.renderPanel(
+        session._diagnostics, session._gridUnitMs, session._phaseCorrection
+      );
       // Draw phase sweep chart after DOM is ready
       requestAnimationFrame(() => {
         Diagnostics.drawPhaseSweepChart(

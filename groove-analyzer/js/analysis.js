@@ -282,6 +282,80 @@ const Analysis = (() => {
     return { swingPercent, swingLabel, sampleCount: trimmed.length };
   }
 
+  /**
+   * Compute phase correction using circular statistics.
+   *
+   * Maps each onset's offset to an angle on a unit circle (one revolution = one grid unit),
+   * computes the circular mean, and returns the systematic shift that should be removed.
+   *
+   * This eliminates the dependence on when the record button was pressed:
+   * the correction centers the onset cluster on the grid, regardless of
+   * the arbitrary phase relationship between the grid and the audio.
+   *
+   * @param {number[]} offsets - signed offsets from nearest grid point (ms)
+   * @param {number} gridUnitMs - one grid unit duration (16th note) in ms
+   * @returns {number} phase correction in ms (subtract from offsets to center them)
+   */
+  function computePhaseCorrection(offsets, gridUnitMs) {
+    if (offsets.length < 4) return 0;
+
+    let sinSum = 0, cosSum = 0;
+    const n = offsets.length;
+
+    for (const o of offsets) {
+      const angle = (o / gridUnitMs) * 2 * Math.PI;
+      sinSum += Math.sin(angle);
+      cosSum += Math.cos(angle);
+    }
+
+    sinSum /= n;
+    cosSum /= n;
+
+    // Resultant length: 0 = dispersed, 1 = perfectly clustered
+    const R = Math.sqrt(sinSum * sinSum + cosSum * cosSum);
+
+    // If onsets are too dispersed, phase correction is unreliable
+    if (R < 0.3) return 0;
+
+    const meanAngle = Math.atan2(sinSum, cosSum);
+    return (meanAngle / (2 * Math.PI)) * gridUnitMs;
+  }
+
+  /**
+   * Re-match onset times to a phase-corrected grid.
+   *
+   * Takes raw onset data (with .time in session-relative ms), converts back to
+   * absolute time, matches against a shifted grid, and returns new matched onsets.
+   *
+   * @param {Array<{time: number, amplitude: number}>} onsets - raw onset data
+   * @param {Object} grid - { points: number[], gridUnitMs, beatMs, subdivisions }
+   * @param {number} phaseCorrection - ms to shift grid points by
+   * @param {number} sessionStart - sessionStartTime for absolute time conversion
+   * @returns {Array} matched onsets with corrected offsets
+   */
+  function rematchWithPhaseCorrection(onsets, grid, phaseCorrection, sessionStart) {
+    // Shift all grid points by the phase correction
+    const shiftedPoints = grid.points.map(p => p + phaseCorrection);
+    const maxOff = maxSubdivisionOffsetMs(grid.gridUnitMs);
+
+    const matched = [];
+    for (const onset of onsets) {
+      const absTime = onset.time + sessionStart;
+      const result = computeOffset(absTime, shiftedPoints);
+      if (!result) continue;
+      if (result.distance > maxOff) continue;
+
+      matched.push({
+        time: onset.time,
+        offset: result.offset,
+        gridTime: result.gridTime,
+        amplitude: onset.amplitude
+      });
+    }
+
+    return matched;
+  }
+
   return {
     computeOffset,
     computeLatencyOffset,
@@ -291,6 +365,8 @@ const Analysis = (() => {
     cooldownSamples,
     classifyOnsets,
     computeWeightedMetrics,
-    computeSwingFactor
+    computeSwingFactor,
+    computePhaseCorrection,
+    rematchWithPhaseCorrection
   };
 })();

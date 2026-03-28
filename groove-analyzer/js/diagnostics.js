@@ -259,25 +259,56 @@ const Diagnostics = (() => {
 
   /**
    * Render the diagnostic panel HTML.
+   * @param {Object} report - diagnostic analysis report
+   * @param {number} gridUnitMs - grid unit duration
+   * @param {number} [appliedCorrection] - phase correction that was applied (ms), if any
    */
-  function renderPanel(report, gridUnitMs) {
+  function renderPanel(report, gridUnitMs, appliedCorrection) {
     const r = report;
-    const phaseDir = r.phase.optimalShiftMs > 0 ? 'late (grid needs to shift later)' : 'early (grid needs to shift earlier)';
+    const wasApplied = appliedCorrection != null && Math.abs(appliedCorrection) > 0.1;
 
-    let html = '<div class="diag-grid">';
+    let html = '';
 
-    // ── Section 1: Current vs Corrected ──
+    // ── Phase Correction Banner ──
+    if (wasApplied) {
+      html += '<div class="diag-banner">';
+      html += '<strong>Phase correction applied:</strong> grid shifted by ' +
+        fmtMs(appliedCorrection) + ' using circular statistics. ';
+      html += 'Results below reflect the corrected grid.';
+      html += '</div>';
+    }
+
+    html += '<div class="diag-grid">';
+
+    // ── Section 1: Post-Correction Alignment ──
     html += '<div class="diag-section">';
-    html += '<h4>Current Grid Alignment</h4>';
+    html += '<h4>' + (wasApplied ? 'Corrected Grid Alignment' : 'Grid Alignment') + '</h4>';
     html += '<table class="diag-table">';
-    html += '<tr><th></th><th>Current</th><th>Phase-Corrected</th></tr>';
-    html += `<tr><td>Mean offset</td><td>${fmtMs(r.current.meanOffset)}</td><td>${fmtMs(r.corrected.meanOffset)}</td></tr>`;
-    html += `<tr><td>Consistency (±)</td><td>${Math.round(r.current.stdDev)}ms</td><td>${Math.round(r.corrected.stdDev)}ms</td></tr>`;
-    html += `<tr><td>Ahead / Behind</td><td>${r.current.aheadCount} / ${r.current.behindCount}</td><td>${r.corrected.aheadCount} / ${r.corrected.behindCount}</td></tr>`;
+    if (wasApplied) {
+      html += '<tr><th></th><th>After Correction</th></tr>';
+      html += `<tr><td>Mean offset</td><td>${fmtMs(r.current.meanOffset)}</td></tr>`;
+      html += `<tr><td>Consistency (±)</td><td>${Math.round(r.current.stdDev)}ms</td></tr>`;
+      html += `<tr><td>Ahead / Behind</td><td>${r.current.aheadCount} / ${r.current.behindCount}</td></tr>`;
+    } else {
+      html += '<tr><th></th><th>Current</th><th>Phase-Corrected</th></tr>';
+      html += `<tr><td>Mean offset</td><td>${fmtMs(r.current.meanOffset)}</td><td>${fmtMs(r.corrected.meanOffset)}</td></tr>`;
+      html += `<tr><td>Consistency (±)</td><td>${Math.round(r.current.stdDev)}ms</td><td>${Math.round(r.corrected.stdDev)}ms</td></tr>`;
+      html += `<tr><td>Ahead / Behind</td><td>${r.current.aheadCount} / ${r.current.behindCount}</td><td>${r.corrected.aheadCount} / ${r.corrected.behindCount}</td></tr>`;
+    }
     html += '</table>';
-    html += `<div class="diag-note">Grid phase error: <strong>${Math.abs(r.phase.optimalShiftMs).toFixed(1)}ms</strong> ${phaseDir}</div>`;
-    if (r.phase.improvementPercent > 5) {
-      html += `<div class="diag-highlight">Phase correction would reduce error by ${Math.round(r.phase.improvementPercent)}%</div>`;
+    if (wasApplied) {
+      const residual = Math.abs(r.phase.optimalShiftMs);
+      if (residual < 2) {
+        html += '<div class="diag-ok">Residual phase error: ' + residual.toFixed(1) + 'ms (excellent)</div>';
+      } else {
+        html += '<div class="diag-note">Residual phase error: ' + residual.toFixed(1) + 'ms</div>';
+      }
+    } else {
+      const phaseDir = r.phase.optimalShiftMs > 0 ? 'late (grid needs to shift later)' : 'early (grid needs to shift earlier)';
+      html += `<div class="diag-note">Grid phase error: <strong>${Math.abs(r.phase.optimalShiftMs).toFixed(1)}ms</strong> ${phaseDir}</div>`;
+      if (r.phase.improvementPercent > 5) {
+        html += `<div class="diag-highlight">Phase correction would reduce error by ${Math.round(r.phase.improvementPercent)}%</div>`;
+      }
     }
     html += '</div>';
 
@@ -310,9 +341,13 @@ const Diagnostics = (() => {
 
     // ── Section 4: Phase Sweep Chart ──
     html += '<div class="diag-section diag-section--wide">';
-    html += '<h4>Phase Sweep — Error vs. Grid Shift</h4>';
+    html += '<h4>Phase Sweep — Residual Error vs. Grid Shift</h4>';
     html += '<canvas id="diag-phase-canvas" class="diag-canvas"></canvas>';
-    html += '<div class="diag-note">The dip shows the optimal grid position. Distance from center (0ms) = current phase error.</div>';
+    if (wasApplied) {
+      html += '<div class="diag-note">Shows residual error after phase correction. The dip near center confirms the correction was effective.</div>';
+    } else {
+      html += '<div class="diag-note">The dip shows the optimal grid position. Distance from center (0ms) = current phase error.</div>';
+    }
     html += '</div>';
 
     // ── Section 5: Verdict ──
