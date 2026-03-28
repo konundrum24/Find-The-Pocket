@@ -10,6 +10,7 @@
 const OnsetDetector = (() => {
   let processor = null;
   let analyser = null;
+  let gainNode = null;
   let prevFlux = 0;
   let prevPrevFlux = 0;
   let prevFrameTimeMs = 0;
@@ -17,6 +18,14 @@ const OnsetDetector = (() => {
   let lastOnsetSample = 0;
   let totalSamples = 0;
   let currentFlux = 0;  // exposed for level display
+
+  // Auto-gain: boost quiet signals so spectral flux rises above analyser noise floor
+  let autoGainFrames = 0;
+  let autoGainPeak = 0;
+  const AUTO_GAIN_WINDOW = 40;  // ~0.5s at 512-sample buffers / 44.1kHz
+  const TARGET_PEAK = 0.25;     // target peak amplitude (linear, ~-12 dBFS)
+  const MAX_GAIN = 32;          // max boost (30 dB) — avoids runaway on silence
+  const MIN_GAIN = 1;           // never attenuate
 
   // Spectrum buffers (allocated once in start())
   let currentSpectrum = null;
@@ -92,6 +101,12 @@ const OnsetDetector = (() => {
 
     initBandState();
 
+    // GainNode for input amplification — zero latency, just a per-sample multiply.
+    // Auto-gain measures the first ~0.5s and boosts quiet signals (phone speakers,
+    // distant mics) so spectral flux rises above the AnalyserNode's noise floor.
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = 1; // start at unity, auto-gain adjusts after measuring
+
     processor = audioCtx.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
     processor.onaudioprocess = function (e) {
@@ -100,12 +115,28 @@ const OnsetDetector = (() => {
       const frameTimeMs = (e.playbackTime + (input.length / 2) / sr) * 1000;
       const frameDurationMs = (input.length / sr) * 1000;
 
+      // Auto-gain: measure peak level over first ~0.5s, then set gain
+      if (active && autoGainFrames < AUTO_GAIN_WINDOW) {
+        for (let i = 0; i < input.length; i++) {
+          const abs = Math.abs(input[i]);
+          if (abs > autoGainPeak) autoGainPeak = abs;
+        }
+        autoGainFrames++;
+        if (autoGainFrames === AUTO_GAIN_WINDOW && autoGainPeak > 0.0001) {
+          const desiredGain = Math.min(MAX_GAIN, Math.max(MIN_GAIN, TARGET_PEAK / autoGainPeak));
+          gainNode.gain.setValueAtTime(desiredGain, audioCtx.currentTime);
+          console.log('[Groove] Auto-gain: peak=' + autoGainPeak.toFixed(5) +
+            ', boost=' + desiredGain.toFixed(1) + 'x (' + (20 * Math.log10(desiredGain)).toFixed(1) + ' dB)');
+        }
+      }
+
       // Capture raw PCM for Essentia post-recording analysis
       if (active) {
         if (pcmChunks.length === 0) {
-          // Record the exact playbackTime of the first captured buffer
-          // so we can align Essentia's ticks with session-relative onset times
-          pcmStartTime = e.playbackTime * 1000;
+          // Align PCM start with onset timestamps: both use buffer midpoint
+          // (e.playbackTime + halfBuffer) so Essentia ticks and onsets share
+          // the same time base
+          pcmStartTime = (e.playbackTime + (input.length / 2) / sr) * 1000;
         }
         pcmChunks.push(new Float32Array(input));
       }
@@ -233,8 +264,9 @@ const OnsetDetector = (() => {
       prevFlux = flux;
     };
 
-    // Signal chain: mic → analyser → processor → destination
-    micSource.connect(analyser);
+    // Signal chain: mic → gain → analyser → processor → destination
+    micSource.connect(gainNode);
+    gainNode.connect(analyser);
     analyser.connect(processor);
     processor.connect(audioCtx.destination); // Required for ScriptProcessor to fire
   }
@@ -256,6 +288,9 @@ const OnsetDetector = (() => {
       pendingOnsets = [];
       pcmChunks = [];
       pcmStartTime = 0;
+      autoGainFrames = 0;
+      autoGainPeak = 0;
+      if (gainNode) gainNode.gain.value = 1; // reset to unity for new measurement
     }
   }
 
@@ -273,6 +308,9 @@ const OnsetDetector = (() => {
     fluxFrameRate = 0;
     pcmChunks = [];
     pcmStartTime = 0;
+    autoGainFrames = 0;
+    autoGainPeak = 0;
+    if (gainNode) gainNode.gain.value = 1;
     initBandState();
     if (prevSpectrum) prevSpectrum.fill(-Infinity);
   }
