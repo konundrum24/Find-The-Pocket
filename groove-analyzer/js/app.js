@@ -750,6 +750,9 @@ const App = (() => {
       }
     }
 
+    // Run grid accuracy diagnostics
+    const diagReport = Diagnostics.analyze(classifiedOnsets, grid, tempo, latencyOffset);
+
     const session = Storage.buildSessionObject({
       mode: appMode === 'playground' ? 'playground' : 'click',
       tempo,
@@ -772,6 +775,10 @@ const App = (() => {
       density,
       densityLabel
     });
+
+    // Attach diagnostics (not persisted to storage, just for display)
+    session._diagnostics = diagReport;
+    session._gridUnitMs = grid.gridUnitMs;
 
     Storage.saveSession(session);
     renderResults(session);
@@ -1027,7 +1034,16 @@ const App = (() => {
       weightedMetrics, globalBpm, tempoBpmStdDev
     );
 
-    return Storage.buildSessionObject({
+    // Run diagnostics on adaptive grid (construct compatible grid object)
+    const diagGrid = {
+      points: grid.points.map(p => p.time),
+      gridUnitMs: grid.medianGridUnitMs,
+      beatMs: grid.medianBeatMs,
+      subdivisions: 4
+    };
+    const diagReport = Diagnostics.analyze(classifiedOnsets, diagGrid, globalBpm, null);
+
+    const session = Storage.buildSessionObject({
       mode: 'freeplay',
       tempo: globalBpm,
       sensitivity,
@@ -1050,6 +1066,11 @@ const App = (() => {
       swingPercent: swingResult ? swingResult.swingPercent : null,
       swingLabel: swingResult ? swingResult.swingLabel : null
     });
+
+    session._diagnostics = diagReport;
+    session._gridUnitMs = grid.medianGridUnitMs;
+
+    return session;
   }
 
   /**
@@ -1381,6 +1402,24 @@ const App = (() => {
       }
     } else {
       bandSection.style.display = 'none';
+    }
+
+    // Diagnostics panel (Click / Playground mode)
+    const diagSection = document.getElementById('diagnostics-section');
+    const diagContent = document.getElementById('diagnostics-content');
+    if (session._diagnostics && diagSection && diagContent) {
+      diagSection.style.display = '';
+      diagContent.innerHTML = Diagnostics.renderPanel(session._diagnostics, session._gridUnitMs);
+      // Draw phase sweep chart after DOM is ready
+      requestAnimationFrame(() => {
+        Diagnostics.drawPhaseSweepChart(
+          'diag-phase-canvas',
+          session._diagnostics.phase.sweepData,
+          session._diagnostics.phase.optimalShiftMs
+        );
+      });
+    } else if (diagSection) {
+      diagSection.style.display = 'none';
     }
 
     // Session saved confirmation
