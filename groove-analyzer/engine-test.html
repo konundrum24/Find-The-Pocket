@@ -1,0 +1,2219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Engine Test Harness — 9-Combination Grid</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #161920;
+    --surface2: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e8e9ed;
+    --text-secondary: #9ca3af;
+    --text-tertiary: #6b7280;
+    --teal: #2dd4bf;
+    --coral: #fb7185;
+    --amber: #fbbf24;
+    --purple: #a78bfa;
+    --blue: #378ADD;
+    --green: #95E86C;
+    --pink: #E85D9C;
+    --light-teal: #4ECDC4;
+    --yellow: #FFD93D;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    padding: 20px; max-width: 1100px; margin: 0 auto;
+  }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 14px; }
+  h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-secondary); margin-bottom: 10px; }
+  .subtitle { color: var(--text-secondary); font-size: 13px; margin-bottom: 20px; }
+
+  /* Controls */
+  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+  button {
+    padding: 10px 20px; border: none; border-radius: 10px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-record { background: var(--coral); color: #fff; }
+  .btn-record.recording { background: #ef4444; animation: pulse 1s infinite; }
+  .btn-stop { background: var(--text-tertiary); color: #fff; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
+  .status { font-size: 13px; color: var(--text-secondary); min-height: 18px; margin-bottom: 6px; }
+  .level-bar { height: 4px; background: var(--border); border-radius: 2px; margin-bottom: 20px; overflow: hidden; }
+  .level-fill { height: 100%; background: var(--teal); width: 0%; transition: width 50ms; }
+  .sensitivity-control { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+  .sensitivity-control input { width: 80px; }
+
+  /* Ground truth */
+  .gt-section {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px; margin-bottom: 20px;
+  }
+  .gt-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .gt-row input { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 10px; border-radius: 6px; font-size: 13px; width: 100px; }
+  .btn-gt { padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 600;
+    background: var(--amber); color: #000; border: none; cursor: pointer; }
+  .btn-gt:disabled { opacity: 0.4; }
+  .gt-info { font-size: 11px; color: var(--text-tertiary); margin-top: 6px; }
+
+  /* Progress */
+  .progress-section { margin-bottom: 20px; display: none; }
+  .progress-bar { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--teal); width: 0%; transition: width 200ms; }
+  .progress-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+  /* Results */
+  .results { display: none; }
+  .results.visible { display: block; }
+  .section { margin-bottom: 20px; }
+
+  /* 3x3 config grid */
+  .config-grid {
+    display: grid; grid-template-columns: 80px 1fr 1fr 1fr;
+    gap: 2px; margin-bottom: 20px;
+  }
+  .config-grid-header {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--text-tertiary); text-align: center; padding: 8px 4px;
+    background: var(--surface);
+  }
+  .config-grid-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--text-tertiary); text-align: center; padding: 12px 4px;
+    background: var(--surface); display: flex; align-items: center; justify-content: center;
+  }
+  .config-cell {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px; text-align: center;
+    transition: border-color 0.2s;
+  }
+  .config-cell:hover { border-color: var(--text-tertiary); }
+  .config-cell .cc-label { font-size: 9px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .config-cell .cc-onsets { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .config-cell .cc-time { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .config-cell .cc-stats { font-size: 10px; color: var(--text-tertiary); margin-top: 4px; line-height: 1.4; }
+  .config-cell .cc-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: middle; }
+
+  /* Timeline */
+  .timeline-section {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px; margin-bottom: 16px;
+  }
+  .timeline-canvas { width: 100%; display: block; }
+
+  /* Comparison table */
+  .comparison-table {
+    width: 100%; border-collapse: collapse; font-size: 11px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  .comparison-table th {
+    text-align: left; font-size: 9px; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--text-tertiary);
+    border-bottom: 1px solid var(--border); padding: 6px 8px;
+    position: sticky; top: 0; background: var(--surface2);
+  }
+  .comparison-table td {
+    padding: 5px 8px; border-bottom: 1px solid rgba(42,45,58,0.4);
+    color: var(--text-secondary); font-variant-numeric: tabular-nums;
+  }
+  .comparison-table tr:hover td { background: rgba(45,212,191,0.05); }
+  .val-good { color: var(--teal); }
+  .val-warn { color: var(--amber); }
+  .val-bad { color: var(--coral); }
+
+  /* Performance panel */
+  .perf-panel {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px; margin-bottom: 16px;
+  }
+
+  /* Essentia panel */
+  .essentia-panel {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px; margin-bottom: 16px;
+  }
+  .essentia-panel .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--purple); }
+
+  /* Band detail panels */
+  .band-detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+  @media (max-width: 700px) { .band-detail-grid { grid-template-columns: 1fr; } }
+  .band-detail-card {
+    background: var(--bg); border-radius: 8px; padding: 10px;
+    border: 1px solid var(--border); font-size: 11px;
+  }
+  .band-detail-card .bd-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-tertiary); margin-bottom: 4px; }
+  .band-detail-card .bd-val { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .band-detail-card .bd-sub { font-size: 10px; color: var(--text-secondary); }
+
+  /* Log */
+  .log-section {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px;
+  }
+  #log {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 11px; color: var(--text-secondary);
+    max-height: 400px; overflow-y: auto;
+    white-space: pre-wrap; line-height: 1.5;
+  }
+  .log-info { color: var(--text-secondary); }
+  .log-engine { color: var(--teal); }
+  .log-essentia { color: var(--purple); }
+  .log-warn { color: var(--amber); }
+  .log-perf { color: var(--pink); }
+
+  /* Details/summary */
+  details { margin-bottom: 12px; }
+  details summary {
+    cursor: pointer; font-size: 12px; color: var(--text-secondary);
+    padding: 8px 0; user-select: none;
+  }
+  details summary:hover { color: var(--text); }
+</style>
+</head>
+<body>
+
+<h1>Engine Test Harness</h1>
+<p class="subtitle">9 combinations: FFT (512, 1024, 2048) &times; Buffer (256, 512, 1024) &mdash; compared against Essentia.js</p>
+
+<div class="controls">
+  <button class="btn-record" id="btn-record" onclick="startRecording()">Record</button>
+  <button class="btn-stop" id="btn-stop" onclick="stopRecording()" disabled>Stop</button>
+  <div class="sensitivity-control">
+    <label>Sensitivity:</label>
+    <input type="range" id="sensitivity" min="2" max="80" value="8">
+    <span id="sens-val">8</span>
+  </div>
+  <div class="sensitivity-control">
+    <label>Cooldown (ms):</label>
+    <input type="range" id="cooldown" min="20" max="200" value="80">
+    <span id="cd-val">80</span>
+  </div>
+</div>
+<div class="status" id="status">Ready &mdash; press Record and play music</div>
+<div class="level-bar"><div class="level-fill" id="level-fill"></div></div>
+
+<!-- Ground Truth -->
+<div class="gt-section">
+  <h3>Ground Truth (optional)</h3>
+  <div class="gt-row">
+    <button class="btn-gt" id="btn-tap" onclick="tapGroundTruth()" disabled>Tap Beat</button>
+    <span class="sensitivity-control">
+      <label>or BPM:</label>
+      <input type="number" id="gt-bpm" placeholder="120" min="30" max="300">
+      <button class="btn-gt" onclick="generateBpmGroundTruth()">Generate Grid</button>
+    </span>
+  </div>
+  <div class="gt-info" id="gt-info">Tap beats during recording, or enter BPM to generate evenly-spaced ground truth after recording.</div>
+</div>
+
+<!-- Progress -->
+<div class="progress-section" id="progress-section">
+  <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+  <div class="progress-label" id="progress-label">Analyzing...</div>
+</div>
+
+<!-- ═══ RESULTS ═══ -->
+<div class="results" id="results">
+
+  <!-- 3x3 Summary Grid -->
+  <div class="section">
+    <h2>Onset Detection &mdash; 9 Configurations</h2>
+    <div class="config-grid" id="config-grid">
+      <!-- Header row -->
+      <div class="config-grid-header"></div>
+      <div class="config-grid-header">Buf 256</div>
+      <div class="config-grid-header">Buf 512</div>
+      <div class="config-grid-header">Buf 1024</div>
+      <!-- Cells filled by JS -->
+    </div>
+  </div>
+
+  <!-- Multi-lane Timeline -->
+  <div class="section timeline-section">
+    <h3>Onset Timeline &mdash; All Engines</h3>
+    <canvas class="timeline-canvas" id="timeline-canvas" height="420"></canvas>
+  </div>
+
+  <!-- Essentia comparison -->
+  <div class="section essentia-panel" id="essentia-panel" style="display:none;">
+    <h2><span class="dot"></span> Essentia.js Results</h2>
+    <div id="essentia-results"></div>
+  </div>
+
+  <!-- Comparison table: precision/recall vs ground truth -->
+  <div class="section perf-panel" id="gt-panel" style="display:none;">
+    <h2>Accuracy vs Ground Truth</h2>
+    <div style="overflow-x:auto;">
+      <table class="comparison-table" id="gt-table"></table>
+    </div>
+  </div>
+
+  <!-- Waveform & Spectrum Diagnostics -->
+  <div class="section timeline-section">
+    <h3>Waveform (full recording)</h3>
+    <canvas class="timeline-canvas" id="waveform-canvas" height="120"></canvas>
+  </div>
+
+  <div class="section timeline-section">
+    <h3>Average Frequency Spectrum (dB)</h3>
+    <p style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px;">
+      Shows where energy lives across the frequency range. Vertical lines mark band boundaries.
+    </p>
+    <canvas class="timeline-canvas" id="spectrum-canvas" height="200"></canvas>
+  </div>
+
+  <!-- Band breakdown per config -->
+  <div class="section">
+    <h2>Per-Band Onset Counts (Current Bands)</h2>
+    <div style="overflow-x:auto;">
+      <table class="comparison-table" id="band-table"></table>
+    </div>
+  </div>
+
+  <!-- V2 bands -->
+  <div class="section">
+    <h2>Per-Band Onset Counts (Proposed Bands — Attack Transients)</h2>
+    <p style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px;">
+      Kick (40-150Hz) · Bass (150-400Hz) · Mid (400-2kHz) · Snare Crack (2-5kHz) · Hi-hat (6-16kHz)
+    </p>
+    <div style="overflow-x:auto;">
+      <table class="comparison-table" id="band-table-v2"></table>
+    </div>
+  </div>
+
+  <!-- HPSS results -->
+  <div class="section perf-panel" id="hpss-panel" style="display:none;">
+    <h2>HPSS — Percussive Signal Band Counts (FFT 1024 / Buf 512)</h2>
+    <p style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px;">
+      Harmonic-Percussive Source Separation removes sustained tones (bass, guitar) before onset detection.
+      Band counts on the percussive-only signal should be much closer to actual drum hit counts.
+    </p>
+    <div style="overflow-x:auto;">
+      <table class="comparison-table" id="hpss-table"></table>
+    </div>
+  </div>
+
+  <!-- Performance metrics -->
+  <div class="section perf-panel">
+    <h2>Performance Metrics</h2>
+    <div style="overflow-x:auto;">
+      <table class="comparison-table" id="perf-table"></table>
+    </div>
+  </div>
+
+  <!-- Flux envelope comparison -->
+  <div class="section timeline-section">
+    <h3>Flux Envelope Overlay (first 5 seconds)</h3>
+    <canvas class="timeline-canvas" id="flux-canvas" height="200"></canvas>
+  </div>
+
+</div>
+
+<!-- Log -->
+<div class="log-section">
+  <h2>Log</h2>
+  <div id="log"></div>
+</div>
+
+<!-- Essentia.js from CDN -->
+<script src="https://cdn.jsdelivr.net/npm/essentia.js@0.1.3/dist/essentia-wasm.web.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/essentia.js@0.1.3/dist/essentia.js-core.js"></script>
+
+<script>
+// ============================================
+// Configuration
+// ============================================
+const FFT_SIZES = [512, 1024, 2048];
+const BUFFER_SIZES = [256, 512, 1024];
+const CONFIGS = [];
+for (const fft of FFT_SIZES) {
+  for (const buf of BUFFER_SIZES) {
+    CONFIGS.push({ fftSize: fft, bufferSize: buf, label: 'FFT ' + fft + ' / Buf ' + buf });
+  }
+}
+
+// Colors for each config (3x3 grid, row-major)
+const CONFIG_COLORS = [
+  '#2dd4bf', '#378ADD', '#a78bfa',   // FFT 512
+  '#fbbf24', '#D85A30', '#E85D9C',   // FFT 1024
+  '#4ECDC4', '#95E86C', '#FFD93D'    // FFT 2048
+];
+
+// Band definitions in Hz (config-independent)
+// Current bands (v1) — original instrument-labeled ranges
+const BAND_FREQS = [
+  { name: 'subLow', label: 'Sub-Low (Kick)',       freqStart: 43,   freqEnd: 129 },
+  { name: 'low',    label: 'Low (Bass)',            freqStart: 129,  freqEnd: 258 },
+  { name: 'lowMid', label: 'Low-Mid (Snare)',       freqStart: 258,  freqEnd: 1034 },
+  { name: 'mid',    label: 'Mid (Guitar/Keys)',      freqStart: 1034, freqEnd: 4050 },
+  { name: 'high',   label: 'High (Hi-hat/Cymbal)',   freqStart: 4050, freqEnd: 16000 }
+];
+
+// Proposed bands (v2) — targeting attack transients for better instrument isolation
+const BAND_FREQS_V2 = [
+  { name: 'v2_kick',      label: 'Kick (40-150)',        freqStart: 40,   freqEnd: 150 },
+  { name: 'v2_bass',      label: 'Bass (150-400)',       freqStart: 150,  freqEnd: 400 },
+  { name: 'v2_mud',       label: 'Mid (400-2k)',         freqStart: 400,  freqEnd: 2000 },
+  { name: 'v2_snare',     label: 'Snare Crack (2-5k)',   freqStart: 2000, freqEnd: 5000 },
+  { name: 'v2_hihat',     label: 'Hi-hat (6-16k)',       freqStart: 6000, freqEnd: 16000 }
+];
+
+function getBandBins(fftSize, sampleRate, bandDefs) {
+  bandDefs = bandDefs || BAND_FREQS;
+  const binHz = sampleRate / fftSize;
+  return bandDefs.map(b => ({
+    ...b,
+    binStart: Math.max(1, Math.round(b.freqStart / binHz)),
+    binEnd: Math.min(fftSize / 2, Math.round(b.freqEnd / binHz))
+  }));
+}
+
+const SPIKE_RATIO = 2.0;
+
+// ============================================
+// State
+// ============================================
+let audioCtx = null;
+let micSource = null;
+let mediaStream = null;
+let processor = null;
+let isRecording = false;
+let recordingStartTime = 0;
+
+// PCM capture
+let pcmChunks = [];
+let capturedSampleRate = 44100;
+
+// Ground truth
+let groundTruthBeats = [];
+let tapStartTime = 0;
+
+// Live level meter
+let livePeakEnv = 0.001;
+let liveFlux = 0;
+let livePrevSpectrum = null;
+
+// Essentia
+let essentia = null;
+let essentiaReady = false;
+
+// Sensitivity & cooldown from UI
+let sensitivity = 8;
+let cooldownMs = 80;
+
+// Results storage
+let allResults = [];
+let essentiaResult = null;
+let hpssResult = null;
+let lastSignal = null; // stored for waveform/spectrum rendering
+let lastSignalSR = 44100;
+
+// ============================================
+// Logging
+// ============================================
+function log(msg, cls) {
+  cls = cls || 'log-info';
+  const el = document.getElementById('log');
+  const line = document.createElement('span');
+  line.className = cls;
+  line.textContent = msg + '\n';
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+// ============================================
+// Initialize Essentia
+// ============================================
+async function initEssentia() {
+  try {
+    if (typeof EssentiaWASM !== 'undefined') {
+      const wasmModule = await EssentiaWASM();
+      essentia = new Essentia(wasmModule);
+      essentiaReady = true;
+      log('Essentia.js ready', 'log-essentia');
+    } else {
+      log('EssentiaWASM not found', 'log-warn');
+    }
+  } catch (err) {
+    log('Essentia.js init failed: ' + err.message, 'log-warn');
+  }
+}
+initEssentia();
+
+// ============================================
+// UI Controls
+// ============================================
+document.getElementById('sensitivity').addEventListener('input', function(e) {
+  sensitivity = parseInt(e.target.value);
+  document.getElementById('sens-val').textContent = sensitivity;
+});
+document.getElementById('cooldown').addEventListener('input', function(e) {
+  cooldownMs = parseInt(e.target.value);
+  document.getElementById('cd-val').textContent = cooldownMs;
+});
+
+// ============================================
+// Ground Truth
+// ============================================
+function tapGroundTruth() {
+  if (!isRecording) return;
+  const now = performance.now();
+  const beatTime = now - tapStartTime;
+  groundTruthBeats.push(beatTime);
+  document.getElementById('gt-info').textContent =
+    groundTruthBeats.length + ' beats tapped (last: ' + beatTime.toFixed(0) + 'ms)';
+}
+
+function generateBpmGroundTruth() {
+  const bpmInput = document.getElementById('gt-bpm').value;
+  if (!bpmInput) return;
+  const bpm = parseFloat(bpmInput);
+  if (isNaN(bpm) || bpm < 30 || bpm > 300) {
+    document.getElementById('gt-info').textContent = 'Invalid BPM (30-300)';
+    return;
+  }
+  const beatMs = 60000 / bpm;
+  const totalMs = pcmChunks.reduce((s, c) => s + c.length, 0) / capturedSampleRate * 1000;
+
+  // Phase-align the grid to the detected onsets.
+  // Find the best phase offset by testing each onset as a potential grid anchor
+  // and picking the one that maximizes matches across all configs.
+  let bestPhase = 0;
+  if (allResults.length > 0) {
+    // Pool all onsets from the config with the most detections
+    let bestConfig = allResults[0];
+    for (const r of allResults) {
+      if (r.onsets.length > bestConfig.onsets.length) bestConfig = r;
+    }
+    const onsets = bestConfig.onsets;
+
+    // Try each of the first 10 onsets as a phase anchor
+    let bestScore = 0;
+    const candidates = onsets.slice(0, Math.min(10, onsets.length));
+    for (const onset of candidates) {
+      // What phase offset would align this onset to the nearest grid point?
+      const phase = onset.time % beatMs;
+      // Count how many onsets fall near a grid point with this phase
+      let score = 0;
+      for (const o of onsets) {
+        const distToGrid = Math.abs(((o.time - phase + beatMs / 2) % beatMs) - beatMs / 2);
+        if (distToGrid < 50) score++;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestPhase = phase;
+      }
+    }
+  }
+
+  groundTruthBeats = [];
+  for (let t = bestPhase; t < totalMs; t += beatMs) {
+    groundTruthBeats.push(t);
+  }
+  document.getElementById('gt-info').textContent =
+    'Generated ' + groundTruthBeats.length + ' beats at ' + bpm + ' BPM (phase: ' + bestPhase.toFixed(1) + 'ms)';
+  // Re-render if results exist
+  if (allResults.length > 0) {
+    renderGroundTruthTable();
+    renderTimeline();
+  }
+}
+
+// ============================================
+// Recording (PCM capture only — no live onset detection)
+// ============================================
+async function startRecording() {
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    document.getElementById('status').textContent = 'Microphone access denied';
+    return;
+  }
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  micSource = audioCtx.createMediaStreamSource(mediaStream);
+  capturedSampleRate = audioCtx.sampleRate;
+
+  // Reset
+  pcmChunks = [];
+  groundTruthBeats = [];
+  allResults = [];
+  essentiaResult = null;
+  livePeakEnv = 0.001;
+  livePrevSpectrum = null;
+
+  document.getElementById('results').classList.remove('visible');
+  document.getElementById('log').innerHTML = '';
+
+  // Simple analyser for level meter
+  const analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 1024;
+  analyser.smoothingTimeConstant = 0;
+  const specBuf = new Float32Array(analyser.frequencyBinCount);
+  let prevSpec = new Float32Array(analyser.frequencyBinCount);
+  prevSpec.fill(-Infinity);
+
+  processor = audioCtx.createScriptProcessor(512, 1, 1);
+  processor.onaudioprocess = function(e) {
+    const input = e.inputBuffer.getChannelData(0);
+    pcmChunks.push(new Float32Array(input));
+
+    // Level meter via flux
+    analyser.getFloatFrequencyData(specBuf);
+    let flux = 0;
+    const end = Math.min(200, specBuf.length);
+    for (let i = 2; i < end; i++) {
+      const curr = Math.pow(10, specBuf[i] / 20);
+      const prev = Math.pow(10, prevSpec[i] / 20);
+      const diff = curr - prev;
+      if (diff > 0) flux += diff;
+    }
+    flux /= (end - 2);
+    const tmp = prevSpec; prevSpec = specBuf; // note: specBuf is overwritten each frame
+    if (flux > livePeakEnv) livePeakEnv = flux;
+    livePeakEnv *= 0.9999;
+    if (livePeakEnv < 0.001) livePeakEnv = 0.001;
+    const level = Math.min(100, (flux / livePeakEnv) * 100);
+    document.getElementById('level-fill').style.width = level + '%';
+  };
+
+  micSource.connect(analyser);
+  analyser.connect(processor);
+  processor.connect(audioCtx.destination);
+
+  isRecording = true;
+  tapStartTime = performance.now();
+  recordingStartTime = audioCtx.currentTime * 1000;
+
+  document.getElementById('btn-record').classList.add('recording');
+  document.getElementById('btn-record').textContent = 'Recording...';
+  document.getElementById('btn-record').disabled = true;
+  document.getElementById('btn-stop').disabled = false;
+  document.getElementById('btn-tap').disabled = false;
+
+  const startTime = Date.now();
+  window._recTimer = setInterval(function() {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+    document.getElementById('status').textContent = 'Recording \u2014 ' + elapsed + 's';
+  }, 250);
+
+  log('Recording started (SR: ' + capturedSampleRate + ' Hz, sens: ' + sensitivity + ', cooldown: ' + cooldownMs + 'ms)');
+}
+
+async function stopRecording() {
+  isRecording = false;
+  clearInterval(window._recTimer);
+
+  if (processor) { processor.disconnect(); processor = null; }
+  if (micSource) { micSource.disconnect(); micSource = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach(function(t) { t.stop(); }); mediaStream = null; }
+
+  document.getElementById('btn-record').classList.remove('recording');
+  document.getElementById('btn-record').textContent = 'Record';
+  document.getElementById('btn-record').disabled = false;
+  document.getElementById('btn-stop').disabled = true;
+  document.getElementById('btn-tap').disabled = true;
+  document.getElementById('level-fill').style.width = '0%';
+
+  // Concatenate PCM
+  const totalLength = pcmChunks.reduce(function(s, a) { return s + a.length; }, 0);
+  const fullSignal = new Float32Array(totalLength);
+  let offset = 0;
+  for (const chunk of pcmChunks) { fullSignal.set(chunk, offset); offset += chunk.length; }
+
+  lastSignal = fullSignal;
+  lastSignalSR = capturedSampleRate;
+
+  const durationSec = totalLength / capturedSampleRate;
+  log('Stopped: ' + durationSec.toFixed(1) + 's of audio captured');
+
+  if (totalLength < capturedSampleRate * 2) {
+    document.getElementById('status').textContent = 'Recording too short (need 2+ seconds)';
+    return;
+  }
+
+  // Show progress
+  document.getElementById('progress-section').style.display = 'block';
+  document.getElementById('status').textContent = 'Analyzing 9 configurations...';
+
+  // Run all 9 configs + Essentia
+  // Use setTimeout to allow UI to update between runs
+  allResults = [];
+  await runAllConfigurations(fullSignal, capturedSampleRate);
+
+  // Run Essentia
+  essentiaResult = runEssentiaPipeline(fullSignal);
+
+  // Run HPSS + onset detection on percussive signal
+  document.getElementById('progress-label').textContent = 'Running HPSS separation...';
+  await new Promise(function(r) { requestAnimationFrame(r); });
+  hpssResult = await runHPSSAnalysis(fullSignal, capturedSampleRate);
+
+  // Make results visible BEFORE rendering so canvas.offsetWidth is non-zero
+  document.getElementById('results').classList.add('visible');
+  // Allow layout to settle, then render
+  await new Promise(function(r) { requestAnimationFrame(r); });
+  renderAllResults();
+  document.getElementById('progress-section').style.display = 'none';
+  document.getElementById('status').textContent = 'Analysis complete \u2014 ' + durationSec.toFixed(1) + 's recording';
+}
+
+// ============================================
+// Offline Onset Detection Engine
+// ============================================
+function runOnsetDetectionOffline(pcmSignal, sampleRate, config) {
+  const { fftSize, bufferSize } = config;
+  const sens = sensitivity;
+  const cooldownSamples = Math.floor((cooldownMs / 1000) * sampleRate);
+  const bands = getBandBins(fftSize, sampleRate, BAND_FREQS);
+  const bandsV2 = getBandBins(fftSize, sampleRate, BAND_FREQS_V2);
+
+  const numBins = fftSize / 2;
+  const binStart = Math.max(1, Math.round(40 / (sampleRate / fftSize)));    // ~40 Hz
+  const binEnd = Math.min(numBins, Math.round(16000 / (sampleRate / fftSize))); // ~16kHz
+
+  // We need to simulate AnalyserNode's FFT behavior.
+  // Since OfflineAudioContext + ScriptProcessor can be unreliable across browsers,
+  // we'll do a pure JS approach: manual FFT via the Web Audio API's OfflineAudioContext.
+  // Actually, let's use OfflineAudioContext properly.
+
+  return new Promise(function(resolve) {
+    const offlineCtx = new OfflineAudioContext(1, pcmSignal.length, sampleRate);
+    const buffer = offlineCtx.createBuffer(1, pcmSignal.length, sampleRate);
+    buffer.getChannelData(0).set(pcmSignal);
+
+    const source = offlineCtx.createBufferSource();
+    source.buffer = buffer;
+
+    const analyser = offlineCtx.createAnalyser();
+    analyser.fftSize = fftSize;
+    analyser.smoothingTimeConstant = 0;
+
+    const proc = offlineCtx.createScriptProcessor(bufferSize, 1, 1);
+
+    // Detection state
+    let prevSpectrum = new Float32Array(numBins);
+    prevSpectrum.fill(-Infinity);
+    let currentSpectrum = new Float32Array(numBins);
+
+    let prevFlux = 0;
+    let prevPrevFlux = 0;
+    let peakEnv = 0.001;
+    let lastOnsetSample = 0;
+    let totalSamples = 0;
+    let prevFrameTimeMs = 0;
+
+    const onsets = [];
+    const fluxEnvelope = [];
+
+    // Per-band state (v1 + v2)
+    const bandStates = {};
+    for (const band of bands.concat(bandsV2)) {
+      bandStates[band.name] = {
+        prevFlux: 0, prevPrevFlux: 0, peakEnv: 0.001,
+        lastOnsetSample: 0, prevFrameTimeMs: 0, allOnsets: []
+      };
+    }
+
+    proc.onaudioprocess = function(e) {
+      const input = e.inputBuffer.getChannelData(0);
+      const sr = sampleRate;
+      const frameTimeMs = (e.playbackTime + (input.length / 2) / sr) * 1000;
+      const frameDurationMs = (input.length / sr) * 1000;
+
+      analyser.getFloatFrequencyData(currentSpectrum);
+
+      // Full-spectrum flux
+      let flux = 0;
+      const fEnd = Math.min(binEnd, currentSpectrum.length);
+      for (let i = binStart; i < fEnd; i++) {
+        const curr = Math.pow(10, currentSpectrum[i] / 20);
+        const prev = Math.pow(10, prevSpectrum[i] / 20);
+        const diff = curr - prev;
+        if (diff > 0) flux += diff;
+      }
+      flux /= Math.max(1, fEnd - binStart);
+
+      // Per-band flux (v1 and v2 bands together)
+      for (const band of bands.concat(bandsV2)) {
+        let bandFlux = 0;
+        const bEnd = Math.min(band.binEnd, currentSpectrum.length);
+        for (let i = band.binStart; i < bEnd; i++) {
+          const curr = Math.pow(10, currentSpectrum[i] / 20);
+          const prev = Math.pow(10, prevSpectrum[i] / 20);
+          const diff = curr - prev;
+          if (diff > 0) bandFlux += diff;
+        }
+        const bs = bandStates[band.name];
+        bandFlux /= Math.max(1, bEnd - band.binStart);
+
+        // Band peak tracking
+        if (bandFlux > bs.peakEnv) bs.peakEnv = bandFlux;
+        bs.peakEnv *= 0.9999;
+        if (bs.peakEnv < 0.001) bs.peakEnv = 0.001;
+
+        // Band peak detection with parabolic interpolation
+        const bandThresh = (sens / 100) * bs.peakEnv;
+        const isBandPrevPeak = bs.prevFlux > bandThresh
+          && bs.prevFlux > bs.prevPrevFlux * SPIKE_RATIO
+          && bs.prevFlux >= bandFlux;
+        const bandCooldownOk = (totalSamples - bs.lastOnsetSample) > cooldownSamples;
+
+        if (isBandPrevPeak && bandCooldownOk && bs.prevFrameTimeMs > 0) {
+          const denom = bs.prevPrevFlux - 2 * bs.prevFlux + bandFlux;
+          let delta = 0;
+          if (Math.abs(denom) > 1e-10) {
+            delta = 0.5 * (bs.prevPrevFlux - bandFlux) / denom;
+            delta = Math.max(-0.5, Math.min(0.5, delta));
+          }
+          const refinedTime = bs.prevFrameTimeMs + delta * frameDurationMs;
+          bs.lastOnsetSample = totalSamples - input.length;
+          bs.allOnsets.push({ time: refinedTime, amplitude: bs.prevFlux });
+        }
+
+        bs.prevPrevFlux = bs.prevFlux;
+        bs.prevFrameTimeMs = frameTimeMs;
+        bs.prevFlux = bandFlux;
+      }
+
+      // Swap spectrum
+      const tmp = prevSpectrum;
+      prevSpectrum = currentSpectrum;
+      currentSpectrum = tmp;
+
+      totalSamples += input.length;
+
+      // Peak tracking
+      if (flux > peakEnv) peakEnv = flux;
+      peakEnv *= 0.9999;
+      if (peakEnv < 0.001) peakEnv = 0.001;
+
+      // Flux envelope
+      fluxEnvelope.push({ time: frameTimeMs, flux: flux });
+
+      // Peak detection with parabolic interpolation (3-point)
+      const thresh = (sens / 100) * peakEnv;
+      const isPrevPeak = prevFlux > thresh
+        && prevFlux > prevPrevFlux * SPIKE_RATIO
+        && prevFlux >= flux;
+      const cooldownOk = (totalSamples - lastOnsetSample) > cooldownSamples;
+
+      if (isPrevPeak && cooldownOk && prevFrameTimeMs > 0) {
+        const denom = prevPrevFlux - 2 * prevFlux + flux;
+        let delta = 0;
+        if (Math.abs(denom) > 1e-10) {
+          delta = 0.5 * (prevPrevFlux - flux) / denom;
+          delta = Math.max(-0.5, Math.min(0.5, delta));
+        }
+        const refinedTime = prevFrameTimeMs + delta * frameDurationMs;
+        lastOnsetSample = totalSamples - input.length;
+        onsets.push({ time: refinedTime, amplitude: prevFlux });
+      }
+
+      prevPrevFlux = prevFlux;
+      prevFrameTimeMs = frameTimeMs;
+      prevFlux = flux;
+    };
+
+    source.connect(analyser);
+    analyser.connect(proc);
+    proc.connect(offlineCtx.destination);
+    source.start(0);
+
+    offlineCtx.startRendering().then(function() {
+      const bandOnsets = {};
+      for (const band of bands) {
+        bandOnsets[band.name] = bandStates[band.name].allOnsets;
+      }
+      const bandOnsetsV2 = {};
+      for (const band of bandsV2) {
+        bandOnsetsV2[band.name] = bandStates[band.name].allOnsets;
+      }
+      resolve({
+        onsets: onsets,
+        bandOnsets: bandOnsets,
+        bandOnsetsV2: bandOnsetsV2,
+        fluxEnvelope: fluxEnvelope,
+        frameRate: sampleRate / bufferSize
+      });
+    });
+  });
+}
+
+// ============================================
+// Run all 9 configurations
+// ============================================
+async function runAllConfigurations(pcmSignal, sampleRate) {
+  for (let i = 0; i < CONFIGS.length; i++) {
+    const config = CONFIGS[i];
+    const pct = ((i) / CONFIGS.length * 100).toFixed(0);
+    document.getElementById('progress-fill').style.width = pct + '%';
+    document.getElementById('progress-label').textContent =
+      'Running ' + config.label + ' (' + (i + 1) + '/' + CONFIGS.length + ')';
+
+    const memBefore = (performance.memory ? performance.memory.usedJSHeapSize : 0);
+    const t0 = performance.now();
+
+    const result = await runOnsetDetectionOffline(pcmSignal, sampleRate, config);
+
+    const elapsed = performance.now() - t0;
+    const memAfter = (performance.memory ? performance.memory.usedJSHeapSize : 0);
+
+    allResults.push({
+      config: config,
+      onsets: result.onsets,
+      bandOnsets: result.bandOnsets,
+      bandOnsetsV2: result.bandOnsetsV2,
+      fluxEnvelope: result.fluxEnvelope,
+      frameRate: result.frameRate,
+      cpuTimeMs: elapsed,
+      memoryDelta: memAfter - memBefore,
+      colorIndex: i
+    });
+
+    log(config.label + ': ' + result.onsets.length + ' onsets, ' +
+      elapsed.toFixed(1) + 'ms', 'log-engine');
+  }
+
+  document.getElementById('progress-fill').style.width = '100%';
+  document.getElementById('progress-label').textContent = 'Done';
+}
+
+// ============================================
+// Essentia Pipeline
+// ============================================
+function runEssentiaPipeline(signal) {
+  if (!essentiaReady || !essentia) {
+    log('Essentia.js unavailable \u2014 skipping', 'log-warn');
+    return null;
+  }
+
+  log('\n\u2500\u2500 Essentia.js \u2500\u2500', 'log-essentia');
+  const t0 = performance.now();
+
+  let analysisSignal = signal;
+  if (capturedSampleRate !== 44100) {
+    const ratio = 44100 / capturedSampleRate;
+    const newLen = Math.round(signal.length * ratio);
+    analysisSignal = new Float32Array(newLen);
+    for (let i = 0; i < newLen; i++) {
+      const srcIdx = i / ratio;
+      const lo = Math.floor(srcIdx);
+      const hi = Math.min(lo + 1, signal.length - 1);
+      const frac = srcIdx - lo;
+      analysisSignal[i] = signal[lo] * (1 - frac) + signal[hi] * frac;
+    }
+    log('Resampled ' + capturedSampleRate + ' \u2192 44100 Hz', 'log-essentia');
+  }
+
+  const vectorSignal = essentia.arrayToVector(analysisSignal);
+  let rhythmResult;
+  try {
+    rhythmResult = essentia.RhythmExtractor2013(vectorSignal, 220, 'multifeature', 40);
+  } catch (err) {
+    log('RhythmExtractor2013 failed: ' + err.message, 'log-warn');
+    try { vectorSignal.delete(); } catch(e) {}
+    return null;
+  }
+
+  const bpm = rhythmResult.bpm;
+  let ticksRaw;
+  try {
+    ticksRaw = essentia.vectorToArray(rhythmResult.ticks);
+  } catch (err) {
+    log('Failed to extract ticks', 'log-warn');
+    try { vectorSignal.delete(); } catch(e) {}
+    return null;
+  }
+  const ticks = Array.from(ticksRaw).map(Number);
+
+  try { rhythmResult.ticks.delete(); } catch(e) {}
+  try { rhythmResult.estimates.delete(); } catch(e) {}
+  try { rhythmResult.bpmIntervals.delete(); } catch(e) {}
+  try { vectorSignal.delete(); } catch(e) {}
+
+  const validTicks = ticks.filter(function(t) { return !isNaN(t) && t >= 0; });
+  const elapsed = performance.now() - t0;
+
+  // Convert to ms
+  const beatTimesMs = validTicks.map(function(t) { return t * 1000; });
+
+  log('BPM: ' + (bpm ? bpm.toFixed(1) : 'N/A') +
+    ', beats: ' + beatTimesMs.length +
+    ', time: ' + elapsed.toFixed(1) + 'ms', 'log-essentia');
+
+  return {
+    bpm: bpm,
+    beatTimesMs: beatTimesMs,
+    cpuTimeMs: elapsed
+  };
+}
+
+// ============================================
+// Onset Comparison (precision / recall)
+// ============================================
+// Find the best phase offset for a specific set of onsets against a BPM grid
+function findBestPhase(onsets, beatMs) {
+  if (onsets.length === 0) return 0;
+  let bestPhase = 0;
+  let bestScore = 0;
+  // Try each of the first 20 onsets as a phase anchor
+  const candidates = onsets.slice(0, Math.min(20, onsets.length));
+  for (const onset of candidates) {
+    const phase = ((onset.time % beatMs) + beatMs) % beatMs; // ensure positive
+    let score = 0;
+    for (const o of onsets) {
+      // Signed distance to nearest grid point
+      let dist = ((o.time - phase) % beatMs + beatMs) % beatMs;
+      if (dist > beatMs / 2) dist -= beatMs;
+      if (Math.abs(dist) < 70) score++;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestPhase = phase;
+    }
+  }
+  return bestPhase;
+}
+
+function compareOnsets(detected, groundTruth, toleranceMs) {
+  toleranceMs = toleranceMs || 70; // 70ms = standard MIR tolerance
+  if (!groundTruth || groundTruth.length === 0) return null;
+
+  let truePositives = 0;
+  let falsePositives = 0;
+  const matched = new Set();
+  const timingErrors = [];
+
+  for (const d of detected) {
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < groundTruth.length; i++) {
+      if (matched.has(i)) continue;
+      const dist = Math.abs(d.time - groundTruth[i]);
+      if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+    }
+    if (bestIdx >= 0 && bestDist <= toleranceMs) {
+      truePositives++;
+      matched.add(bestIdx);
+      timingErrors.push(d.time - groundTruth[bestIdx]);
+    } else {
+      falsePositives++;
+    }
+  }
+
+  const falseNegatives = groundTruth.length - matched.size;
+  const precision = truePositives / (truePositives + falsePositives) || 0;
+  const recall = truePositives / (truePositives + falseNegatives) || 0;
+  const fMeasure = 2 * precision * recall / (precision + recall) || 0;
+  const meanError = timingErrors.length > 0
+    ? timingErrors.reduce(function(a, b) { return a + b; }, 0) / timingErrors.length : 0;
+  const stdError = timingErrors.length > 1
+    ? Math.sqrt(timingErrors.reduce(function(a, b) { return a + (b - meanError) ** 2; }, 0) / timingErrors.length) : 0;
+
+  return {
+    truePositives: truePositives,
+    falsePositives: falsePositives,
+    falseNegatives: falseNegatives,
+    precision: precision,
+    recall: recall,
+    fMeasure: fMeasure,
+    meanError: meanError,
+    stdError: stdError
+  };
+}
+
+// ============================================
+// Render All Results
+// ============================================
+// ============================================
+// HPSS — Harmonic-Percussive Source Separation
+// ============================================
+async function runHPSSAnalysis(pcmSignal, sampleRate) {
+  const t0 = performance.now();
+  log('\n\u2500\u2500 HPSS \u2500\u2500', 'log-perf');
+
+  // STFT parameters
+  const fftSize = 1024;
+  const hopSize = 512;  // 50% overlap
+  const numBins = fftSize / 2 + 1; // 513 bins
+  const numFrames = Math.floor((pcmSignal.length - fftSize) / hopSize) + 1;
+
+  if (numFrames < 10) {
+    log('Too short for HPSS', 'log-warn');
+    return null;
+  }
+
+  // Hann window
+  const window = new Float32Array(fftSize);
+  for (let i = 0; i < fftSize; i++) {
+    window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / fftSize));
+  }
+
+  // Compute magnitude spectrogram using OfflineAudioContext
+  // We'll use a simpler approach: manual FFT isn't available in JS easily,
+  // so we use OfflineAudioContext with an AnalyserNode to get spectra frame by frame.
+  // But OfflineAudioContext doesn't let us step frame by frame...
+  // Instead, use the existing approach: run an OfflineAudioContext with ScriptProcessor
+  // at hopSize buffer, read AnalyserNode each frame.
+
+  const spectrogram = []; // array of Float32Array (magnitude in linear scale)
+
+  const result = await new Promise(function(resolve) {
+    const offlineCtx = new OfflineAudioContext(1, pcmSignal.length, sampleRate);
+    const buffer = offlineCtx.createBuffer(1, pcmSignal.length, sampleRate);
+    buffer.getChannelData(0).set(pcmSignal);
+
+    const source = offlineCtx.createBufferSource();
+    source.buffer = buffer;
+
+    const analyser = offlineCtx.createAnalyser();
+    analyser.fftSize = fftSize;
+    analyser.smoothingTimeConstant = 0;
+
+    const proc = offlineCtx.createScriptProcessor(hopSize, 1, 1);
+    const specBuf = new Float32Array(analyser.frequencyBinCount);
+
+    proc.onaudioprocess = function(e) {
+      analyser.getFloatFrequencyData(specBuf);
+      // Convert dB to linear magnitude
+      const frame = new Float32Array(specBuf.length);
+      for (let i = 0; i < specBuf.length; i++) {
+        frame[i] = Math.pow(10, specBuf[i] / 20);
+      }
+      spectrogram.push(frame);
+    };
+
+    source.connect(analyser);
+    analyser.connect(proc);
+    proc.connect(offlineCtx.destination);
+    source.start(0);
+
+    offlineCtx.startRendering().then(function() {
+      resolve();
+    });
+  });
+
+  log('Spectrogram: ' + spectrogram.length + ' frames x ' + (spectrogram[0] ? spectrogram[0].length : 0) + ' bins', 'log-perf');
+
+  if (spectrogram.length < 10) {
+    log('Spectrogram too short', 'log-warn');
+    return null;
+  }
+
+  const nFrames = spectrogram.length;
+  const nBins = spectrogram[0].length;
+
+  // Median filter helper (1D, odd kernel)
+  function medianFilter1D(arr, kernelSize) {
+    const half = Math.floor(kernelSize / 2);
+    const out = new Float32Array(arr.length);
+    const buf = [];
+    for (let i = 0; i < arr.length; i++) {
+      buf.length = 0;
+      for (let j = i - half; j <= i + half; j++) {
+        const idx = Math.max(0, Math.min(arr.length - 1, j));
+        buf.push(arr[idx]);
+      }
+      buf.sort(function(a, b) { return a - b; });
+      out[i] = buf[Math.floor(buf.length / 2)];
+    }
+    return out;
+  }
+
+  // Apply horizontal median filter (along time axis) → harmonic
+  // Apply vertical median filter (along frequency axis) → percussive
+  const harmonicKernel = 17;  // ~17 frames ≈ 200ms at hop=512/44.1kHz
+  const percussiveKernel = 17; // ~17 bins ≈ 730Hz at 44.1kHz/1024
+
+  log('Applying median filters (h=' + harmonicKernel + ', p=' + percussiveKernel + ')...', 'log-perf');
+
+  // Harmonic enhancement: horizontal median filter (per frequency bin, across time)
+  const harmonicSpec = [];
+  for (let f = 0; f < nBins; f++) {
+    // Extract time series for this frequency bin
+    const timeSeries = new Float32Array(nFrames);
+    for (let t = 0; t < nFrames; t++) {
+      timeSeries[t] = spectrogram[t][f];
+    }
+    const filtered = medianFilter1D(timeSeries, harmonicKernel);
+    if (f === 0) {
+      for (let t = 0; t < nFrames; t++) {
+        harmonicSpec.push(new Float32Array(nBins));
+      }
+    }
+    for (let t = 0; t < nFrames; t++) {
+      harmonicSpec[t][f] = filtered[t];
+    }
+  }
+
+  // Percussive enhancement: vertical median filter (per time frame, across frequency)
+  const percussiveSpec = [];
+  for (let t = 0; t < nFrames; t++) {
+    const freqSlice = spectrogram[t];
+    const filtered = medianFilter1D(freqSlice, percussiveKernel);
+    percussiveSpec.push(filtered);
+  }
+
+  // Soft masking: percussive mask = P / (H + P + epsilon)
+  const epsilon = 1e-10;
+  const percussiveMasked = [];
+  for (let t = 0; t < nFrames; t++) {
+    const frame = new Float32Array(nBins);
+    for (let f = 0; f < nBins; f++) {
+      const h = harmonicSpec[t][f];
+      const p = percussiveSpec[t][f];
+      const mask = p / (h + p + epsilon);
+      frame[f] = spectrogram[t][f] * mask;
+    }
+    percussiveMasked.push(frame);
+  }
+
+  log('HPSS complete. Running onset detection on percussive signal...', 'log-perf');
+
+  // Now run onset detection on the percussive spectrogram
+  // Compute spectral flux from the percussive-masked spectrogram
+  const sens = sensitivity;
+  const cooldownSamples = Math.floor((cooldownMs / 1000) * sampleRate);
+  const frameRate = sampleRate / hopSize;
+  const frameDurationMs = (hopSize / sampleRate) * 1000;
+
+  // Broadband onset detection on percussive flux
+  let prevFlux = 0, prevPrevFlux = 0, peakEnv = 0.001;
+  let lastOnsetSample = 0, totalSamples = 0, prevFrameTimeMs = 0;
+  const percOnsets = [];
+
+  // V2 band detection on percussive spectrogram
+  const v2Bands = getBandBins(fftSize, sampleRate, BAND_FREQS_V2);
+  const v1Bands = getBandBins(fftSize, sampleRate, BAND_FREQS);
+  const bandStates = {};
+  for (const band of v2Bands.concat(v1Bands)) {
+    bandStates[band.name] = {
+      prevFlux: 0, prevPrevFlux: 0, peakEnv: 0.001,
+      lastOnsetSample: 0, prevFrameTimeMs: 0, allOnsets: []
+    };
+  }
+
+  const binStart = Math.max(1, Math.round(40 / (sampleRate / fftSize)));
+  const binEnd = Math.min(nBins, Math.round(16000 / (sampleRate / fftSize)));
+
+  for (let t = 1; t < nFrames; t++) {
+    const frameTimeMs = (t * hopSize / sampleRate) * 1000;
+    totalSamples = t * hopSize;
+
+    // Broadband percussive flux
+    let flux = 0;
+    for (let f = binStart; f < binEnd; f++) {
+      const diff = percussiveMasked[t][f] - percussiveMasked[t - 1][f];
+      if (diff > 0) flux += diff;
+    }
+    flux /= (binEnd - binStart);
+
+    // Per-band flux on percussive spectrogram
+    for (const band of v2Bands.concat(v1Bands)) {
+      let bandFlux = 0;
+      const bEnd = Math.min(band.binEnd, nBins);
+      for (let f = band.binStart; f < bEnd; f++) {
+        const diff = percussiveMasked[t][f] - percussiveMasked[t - 1][f];
+        if (diff > 0) bandFlux += diff;
+      }
+      const bs = bandStates[band.name];
+      bandFlux /= Math.max(1, bEnd - band.binStart);
+
+      if (bandFlux > bs.peakEnv) bs.peakEnv = bandFlux;
+      bs.peakEnv *= 0.9999;
+      if (bs.peakEnv < 0.001) bs.peakEnv = 0.001;
+
+      const bandThresh = (sens / 100) * bs.peakEnv;
+      const isBandPrevPeak = bs.prevFlux > bandThresh
+        && bs.prevFlux > bs.prevPrevFlux * SPIKE_RATIO
+        && bs.prevFlux >= bandFlux;
+      const bandCooldownOk = (totalSamples - bs.lastOnsetSample) > cooldownSamples;
+
+      if (isBandPrevPeak && bandCooldownOk && bs.prevFrameTimeMs > 0) {
+        const denom = bs.prevPrevFlux - 2 * bs.prevFlux + bandFlux;
+        let delta = 0;
+        if (Math.abs(denom) > 1e-10) {
+          delta = 0.5 * (bs.prevPrevFlux - bandFlux) / denom;
+          delta = Math.max(-0.5, Math.min(0.5, delta));
+        }
+        const refinedTime = bs.prevFrameTimeMs + delta * frameDurationMs;
+        bs.lastOnsetSample = totalSamples - hopSize;
+        bs.allOnsets.push({ time: refinedTime, amplitude: bs.prevFlux });
+      }
+
+      bs.prevPrevFlux = bs.prevFlux;
+      bs.prevFrameTimeMs = frameTimeMs;
+      bs.prevFlux = bandFlux;
+    }
+
+    // Broadband peak tracking
+    if (flux > peakEnv) peakEnv = flux;
+    peakEnv *= 0.9999;
+    if (peakEnv < 0.001) peakEnv = 0.001;
+
+    const thresh = (sens / 100) * peakEnv;
+    const isPrevPeak = prevFlux > thresh
+      && prevFlux > prevPrevFlux * SPIKE_RATIO
+      && prevFlux >= flux;
+    const cooldownOk = (totalSamples - lastOnsetSample) > cooldownSamples;
+
+    if (isPrevPeak && cooldownOk && prevFrameTimeMs > 0) {
+      const denom = prevPrevFlux - 2 * prevFlux + flux;
+      let delta = 0;
+      if (Math.abs(denom) > 1e-10) {
+        delta = 0.5 * (prevPrevFlux - flux) / denom;
+        delta = Math.max(-0.5, Math.min(0.5, delta));
+      }
+      const refinedTime = prevFrameTimeMs + delta * frameDurationMs;
+      lastOnsetSample = totalSamples - hopSize;
+      percOnsets.push({ time: refinedTime, amplitude: prevFlux });
+    }
+
+    prevPrevFlux = prevFlux;
+    prevFrameTimeMs = frameTimeMs;
+    prevFlux = flux;
+  }
+
+  const elapsed = performance.now() - t0;
+
+  const bandOnsetsV1 = {};
+  for (const band of v1Bands) {
+    bandOnsetsV1[band.name] = bandStates[band.name].allOnsets;
+  }
+  const bandOnsetsV2 = {};
+  for (const band of v2Bands) {
+    bandOnsetsV2[band.name] = bandStates[band.name].allOnsets;
+  }
+
+  log('HPSS percussive onsets: ' + percOnsets.length + ' broadband', 'log-perf');
+  for (const band of v2Bands) {
+    log('  ' + band.label + ': ' + bandStates[band.name].allOnsets.length, 'log-perf');
+  }
+  log('HPSS total time: ' + elapsed.toFixed(0) + 'ms', 'log-perf');
+
+  return {
+    percOnsets: percOnsets,
+    bandOnsetsV1: bandOnsetsV1,
+    bandOnsetsV2: bandOnsetsV2,
+    cpuTimeMs: elapsed,
+    spectrogramFrames: nFrames
+  };
+}
+
+// ── HPSS Results Table ──
+function renderHPSSPanel() {
+  const panel = document.getElementById('hpss-panel');
+  if (!hpssResult) { panel.style.display = 'none'; return; }
+
+  panel.style.display = '';
+  const table = document.getElementById('hpss-table');
+
+  let html = '<thead><tr><th>Signal</th>';
+  for (const b of BAND_FREQS_V2) html += '<th>' + b.label + '</th>';
+  html += '<th>Total</th></tr></thead><tbody>';
+
+  // HPSS percussive row
+  html += '<tr><td style="color:var(--pink)">HPSS Percussive</td>';
+  for (const b of BAND_FREQS_V2) {
+    const count = hpssResult.bandOnsetsV2[b.name] ? hpssResult.bandOnsetsV2[b.name].length : 0;
+    html += '<td style="color:var(--pink)">' + count + '</td>';
+  }
+  html += '<td style="color:var(--pink)">' + hpssResult.percOnsets.length + '</td></tr>';
+
+  // Compare with raw FFT 1024 / Buf 512 (index 4 in allResults)
+  if (allResults.length > 4) {
+    const r = allResults[4]; // FFT 1024 / Buf 512
+    html += '<tr><td style="color:var(--coral)">Raw (FFT 1024/512)</td>';
+    for (const b of BAND_FREQS_V2) {
+      const count = r.bandOnsetsV2[b.name] ? r.bandOnsetsV2[b.name].length : 0;
+      html += '<td>' + count + '</td>';
+    }
+    html += '<td>' + r.onsets.length + '</td></tr>';
+  }
+
+  html += '</tbody></table>';
+
+  // ── Amplitude Analysis for Snare Crack Band ──
+  const snareOnsets = hpssResult.bandOnsetsV2.v2_snare || [];
+  if (snareOnsets.length > 0) {
+    const amps = snareOnsets.map(function(o) { return o.amplitude; }).sort(function(a, b) { return b - a; });
+    const maxAmp = amps[0];
+    const minAmp = amps[amps.length - 1];
+    const medianAmp = amps[Math.floor(amps.length / 2)];
+
+    // Percentile thresholds
+    const p25 = amps[Math.floor(amps.length * 0.25)];
+    const p50 = amps[Math.floor(amps.length * 0.50)];
+    const p75 = amps[Math.floor(amps.length * 0.75)];
+
+    // Try to find a natural gap: look for the largest ratio between consecutive sorted amplitudes
+    let bestGapIdx = 0;
+    let bestGapRatio = 0;
+    for (let i = 1; i < amps.length; i++) {
+      if (amps[i] > 0) {
+        const ratio = amps[i - 1] / amps[i];
+        if (ratio > bestGapRatio) {
+          bestGapRatio = ratio;
+          bestGapIdx = i;
+        }
+      }
+    }
+    const gapThreshold = amps[bestGapIdx];
+    const aboveGap = bestGapIdx;
+    const belowGap = amps.length - bestGapIdx;
+
+    html += '<h3 style="margin-top:20px;">Snare Crack (2-5kHz) — Amplitude Analysis</h3>';
+    html += '<p style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px;">' +
+      'If snare cracks are louder than hi-hat bleed in this band, amplitude thresholding can separate them.</p>';
+
+    html += '<table class="comparison-table"><thead><tr>' +
+      '<th>Total</th><th>Max Amp</th><th>Median</th><th>Min</th>' +
+      '<th>P25 (loud)</th><th>P50</th><th>P75 (quiet)</th>' +
+      '<th>Best Gap At</th><th>Above Gap</th><th>Below Gap</th><th>Gap Ratio</th>' +
+      '</tr></thead><tbody><tr>' +
+      '<td>' + amps.length + '</td>' +
+      '<td>' + maxAmp.toExponential(2) + '</td>' +
+      '<td>' + medianAmp.toExponential(2) + '</td>' +
+      '<td>' + minAmp.toExponential(2) + '</td>' +
+      '<td>' + p25.toExponential(2) + '</td>' +
+      '<td>' + p50.toExponential(2) + '</td>' +
+      '<td>' + p75.toExponential(2) + '</td>' +
+      '<td>#' + bestGapIdx + '</td>' +
+      '<td style="color:var(--teal)">' + aboveGap + '</td>' +
+      '<td>' + belowGap + '</td>' +
+      '<td>' + bestGapRatio.toFixed(1) + 'x</td>' +
+      '</tr></tbody></table>';
+
+    // Show onset counts at various amplitude percentile thresholds
+    html += '<h3 style="margin-top:16px;">Amplitude Thresholding — Onset Counts</h3>';
+    html += '<p style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px;">' +
+      'Expected snare count: ~144 (backbeats on 2 &amp; 4 at 91 BPM over 190s). ' +
+      'Which threshold gets closest?</p>';
+
+    const thresholds = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90];
+    html += '<table class="comparison-table"><thead><tr><th>Threshold</th><th>Min Amplitude</th><th>Onsets Above</th><th>% of Total</th></tr></thead><tbody>';
+
+    for (const pct of thresholds) {
+      const thresh = maxAmp * pct;
+      let count = 0;
+      for (const a of amps) { if (a >= thresh) count++; else break; } // amps is sorted descending
+      const cls = (count >= 120 && count <= 180) ? 'val-good' : (count >= 80 && count <= 250) ? 'val-warn' : '';
+      html += '<tr><td>' + (pct * 100).toFixed(0) + '% of max</td>' +
+        '<td>' + thresh.toExponential(2) + '</td>' +
+        '<td class="' + cls + '">' + count + '</td>' +
+        '<td>' + ((count / amps.length) * 100).toFixed(1) + '%</td></tr>';
+    }
+
+    // Also show the natural gap threshold
+    const gapCount = aboveGap;
+    const gapCls = (gapCount >= 120 && gapCount <= 180) ? 'val-good' : (gapCount >= 80 && gapCount <= 250) ? 'val-warn' : '';
+    html += '<tr style="border-top:2px solid var(--border)"><td>Natural gap</td>' +
+      '<td>' + gapThreshold.toExponential(2) + '</td>' +
+      '<td class="' + gapCls + '">' + gapCount + '</td>' +
+      '<td>' + ((gapCount / amps.length) * 100).toFixed(1) + '%</td></tr>';
+
+    html += '</tbody></table>';
+
+    // Draw amplitude histogram as a simple canvas
+    html += '<h3 style="margin-top:16px;">Amplitude Distribution — Snare Crack Band</h3>';
+    html += '<p style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px;">' +
+      'Each bar = one onset, sorted loudest to quietest. A clear "cliff" indicates where snare stops and hi-hat bleed begins.</p>';
+    html += '<canvas id="snare-amp-canvas" style="width:100%;height:150px;display:block;"></canvas>';
+  }
+
+  table.innerHTML = html;
+
+  // Draw amplitude histogram canvas
+  if (snareOnsets.length > 0) {
+    requestAnimationFrame(function() {
+      const canvas = document.getElementById('snare-amp-canvas');
+      if (!canvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = canvas.offsetWidth * dpr;
+      canvas.height = 150 * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      const W = canvas.offsetWidth;
+      const H = 150;
+      const margin = 5;
+
+      ctx.fillStyle = '#0f1117';
+      ctx.fillRect(0, 0, W, H);
+
+      const amps = snareOnsets.map(function(o) { return o.amplitude; }).sort(function(a, b) { return b - a; });
+      const maxAmp = amps[0];
+
+      const barW = Math.max(1, (W - 2 * margin) / amps.length);
+
+      for (let i = 0; i < amps.length; i++) {
+        const x = margin + i * barW;
+        const h = (amps[i] / maxAmp) * (H - 2 * margin);
+        // Color: green for top portion, dimmer for lower
+        const pct = amps[i] / maxAmp;
+        if (pct > 0.3) {
+          ctx.fillStyle = '#2dd4bf';
+        } else if (pct > 0.1) {
+          ctx.fillStyle = '#fbbf24';
+        } else {
+          ctx.fillStyle = '#6b7280';
+        }
+        ctx.fillRect(x, H - margin - h, Math.max(1, barW - 0.5), h);
+      }
+
+      // Draw expected snare count line (~144)
+      if (amps.length > 144) {
+        const lineX = margin + 144 * barW;
+        ctx.strokeStyle = '#fb7185';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(lineX, margin);
+        ctx.lineTo(lineX, H - margin);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#fb7185';
+        ctx.font = '10px -apple-system, sans-serif';
+        ctx.fillText('~144 snare', lineX + 4, margin + 12);
+      }
+
+      // Labels
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '9px -apple-system, sans-serif';
+      ctx.fillText('Loudest', margin, H - 1);
+      ctx.fillText('Quietest', W - 50, H - 1);
+    });
+  }
+}
+
+// ============================================
+// Render All Results
+// ============================================
+function renderAllResults() {
+  renderConfigGrid();
+  renderTimeline();
+  renderWaveform();
+  renderSpectrum();
+  renderBandTable();
+  renderBandTableV2();
+  renderHPSSPanel();
+  renderPerfTable();
+  renderFluxOverlay();
+  renderEssentiaPanel();
+  if (groundTruthBeats.length > 0) renderGroundTruthTable();
+}
+
+// ── 3x3 Grid ──
+function renderConfigGrid() {
+  const grid = document.getElementById('config-grid');
+  // Clear old cells (keep header row = first 4 children)
+  while (grid.children.length > 4) grid.removeChild(grid.lastChild);
+
+  // Find max onsets for color scaling
+  const maxOnsets = Math.max.apply(null, allResults.map(function(r) { return r.onsets.length; }));
+
+  for (let fftIdx = 0; fftIdx < FFT_SIZES.length; fftIdx++) {
+    const fft = FFT_SIZES[fftIdx];
+    // Row label
+    const label = document.createElement('div');
+    label.className = 'config-grid-label';
+    label.textContent = 'FFT ' + fft;
+    grid.appendChild(label);
+
+    for (let bufIdx = 0; bufIdx < BUFFER_SIZES.length; bufIdx++) {
+      const resultIdx = fftIdx * 3 + bufIdx;
+      const r = allResults[resultIdx];
+      const color = CONFIG_COLORS[resultIdx];
+
+      const cell = document.createElement('div');
+      cell.className = 'config-cell';
+
+      // Count per-band (v2)
+      const v2Counts = {};
+      for (const bName in r.bandOnsetsV2) {
+        v2Counts[bName] = r.bandOnsetsV2[bName].length;
+      }
+
+      cell.innerHTML =
+        '<div class="cc-label"><span class="cc-dot" style="background:' + color + '"></span>' +
+        r.config.label + '</div>' +
+        '<div class="cc-onsets">' + r.onsets.length + '</div>' +
+        '<div class="cc-time">' + r.cpuTimeMs.toFixed(0) + 'ms / ' +
+        (r.frameRate).toFixed(0) + ' fps</div>' +
+        '<div class="cc-stats">' +
+        'HH: ' + (v2Counts.v2_hihat || 0) +
+        ' \u00B7 Snr: ' + (v2Counts.v2_snare || 0) +
+        ' \u00B7 Kick: ' + (v2Counts.v2_kick || 0) +
+        '</div>';
+
+      grid.appendChild(cell);
+    }
+  }
+}
+
+// ── Multi-lane Timeline ──
+function renderTimeline() {
+  const canvas = document.getElementById('timeline-canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const laneHeight = 30;
+  const labelWidth = 120;
+  const totalLanes = allResults.length + (essentiaResult ? 1 : 0) + (groundTruthBeats.length > 0 ? 1 : 0);
+  const canvasHeight = totalLanes * laneHeight + 20;
+
+  canvas.style.height = canvasHeight + 'px';
+  canvas.width = canvas.offsetWidth * dpr;
+  canvas.height = canvasHeight * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const W = canvas.offsetWidth;
+  const H = canvasHeight;
+
+  ctx.fillStyle = '#0f1117';
+  ctx.fillRect(0, 0, W, H);
+
+  // Find time range
+  let maxTime = 0;
+  for (const r of allResults) {
+    for (const o of r.onsets) {
+      if (o.time > maxTime) maxTime = o.time;
+    }
+  }
+  if (essentiaResult) {
+    for (const t of essentiaResult.beatTimesMs) {
+      if (t > maxTime) maxTime = t;
+    }
+  }
+  if (groundTruthBeats.length > 0) {
+    const lastGt = groundTruthBeats[groundTruthBeats.length - 1];
+    if (lastGt > maxTime) maxTime = lastGt;
+  }
+  maxTime *= 1.05; // padding
+  if (maxTime < 1000) maxTime = 1000;
+
+  const plotLeft = labelWidth;
+  const plotWidth = W - labelWidth - 10;
+
+  function timeToX(t) { return plotLeft + (t / maxTime) * plotWidth; }
+
+  let lane = 0;
+
+  // Ground truth lane
+  if (groundTruthBeats.length > 0) {
+    const y = lane * laneHeight + 10;
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '10px -apple-system, sans-serif';
+    ctx.fillText('Ground Truth', 4, y + laneHeight / 2 + 3);
+
+    for (const t of groundTruthBeats) {
+      const x = timeToX(t);
+      ctx.strokeStyle = 'rgba(251,191,36,0.3)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, 10);
+      ctx.lineTo(x, H);
+      ctx.stroke();
+
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillRect(x - 1, y + 4, 3, laneHeight - 8);
+    }
+    lane++;
+  }
+
+  // Essentia lane
+  if (essentiaResult) {
+    const y = lane * laneHeight + 10;
+    ctx.fillStyle = '#a78bfa';
+    ctx.font = '10px -apple-system, sans-serif';
+    ctx.fillText('Essentia', 4, y + laneHeight / 2 + 3);
+
+    for (const t of essentiaResult.beatTimesMs) {
+      const x = timeToX(t);
+      ctx.fillStyle = 'rgba(167,139,250,0.8)';
+      ctx.fillRect(x - 1, y + 4, 2, laneHeight - 8);
+    }
+    lane++;
+  }
+
+  // Config lanes
+  for (let i = 0; i < allResults.length; i++) {
+    const r = allResults[i];
+    const y = lane * laneHeight + 10;
+    const color = CONFIG_COLORS[i];
+
+    // Label
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '9px -apple-system, sans-serif';
+    ctx.fillText(r.config.label, 4, y + laneHeight / 2 + 3);
+
+    // Lane background
+    ctx.fillStyle = (lane % 2 === 0) ? 'rgba(255,255,255,0.02)' : 'transparent';
+    ctx.fillRect(plotLeft, y, plotWidth, laneHeight);
+
+    // Onset ticks
+    for (const o of r.onsets) {
+      const x = timeToX(o.time);
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.8;
+      ctx.fillRect(x, y + 5, 1.5, laneHeight - 10);
+    }
+    ctx.globalAlpha = 1;
+
+    lane++;
+  }
+
+  // Time axis
+  ctx.strokeStyle = '#2a2d3a';
+  ctx.lineWidth = 1;
+  const secStep = maxTime > 30000 ? 5000 : maxTime > 10000 ? 2000 : 1000;
+  for (let t = 0; t <= maxTime; t += secStep) {
+    const x = timeToX(t);
+    ctx.beginPath();
+    ctx.moveTo(x, 5);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '9px -apple-system, sans-serif';
+    ctx.fillText((t / 1000).toFixed(0) + 's', x + 2, H - 2);
+  }
+}
+
+// ── Waveform ──
+function renderWaveform() {
+  if (!lastSignal || lastSignal.length === 0) return;
+  const canvas = document.getElementById('waveform-canvas');
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.offsetWidth * dpr;
+  canvas.height = 120 * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const W = canvas.offsetWidth;
+  const H = 120;
+  const margin = 5;
+
+  ctx.fillStyle = '#0f1117';
+  ctx.fillRect(0, 0, W, H);
+
+  const signal = lastSignal;
+  const samplesPerPixel = Math.ceil(signal.length / (W - 2 * margin));
+  const mid = H / 2;
+
+  ctx.strokeStyle = '#2dd4bf';
+  ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.7;
+  ctx.beginPath();
+
+  for (let px = 0; px < W - 2 * margin; px++) {
+    const startSample = px * samplesPerPixel;
+    const endSample = Math.min(startSample + samplesPerPixel, signal.length);
+    let minVal = 1, maxVal = -1;
+    for (let s = startSample; s < endSample; s++) {
+      if (signal[s] < minVal) minVal = signal[s];
+      if (signal[s] > maxVal) maxVal = signal[s];
+    }
+    const x = margin + px;
+    const yMin = mid - maxVal * (mid - margin);
+    const yMax = mid - minVal * (mid - margin);
+    ctx.moveTo(x, yMin);
+    ctx.lineTo(x, yMax);
+  }
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Center line
+  ctx.strokeStyle = '#2a2d3a';
+  ctx.beginPath();
+  ctx.moveTo(margin, mid);
+  ctx.lineTo(W - margin, mid);
+  ctx.stroke();
+
+  // Time labels
+  const durationSec = signal.length / lastSignalSR;
+  ctx.fillStyle = '#6b7280';
+  ctx.font = '9px -apple-system, sans-serif';
+  const step = durationSec > 60 ? 10 : durationSec > 20 ? 5 : 2;
+  for (let t = 0; t <= durationSec; t += step) {
+    const x = margin + (t / durationSec) * (W - 2 * margin);
+    ctx.fillText(t + 's', x, H - 1);
+  }
+}
+
+// ── Frequency Spectrum ──
+function renderSpectrum() {
+  if (!lastSignal || lastSignal.length === 0) return;
+  const canvas = document.getElementById('spectrum-canvas');
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.offsetWidth * dpr;
+  canvas.height = 200 * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const W = canvas.offsetWidth;
+  const H = 200;
+  const margin = { left: 40, right: 10, top: 10, bottom: 25 };
+
+  ctx.fillStyle = '#0f1117';
+  ctx.fillRect(0, 0, W, H);
+
+  const signal = lastSignal;
+  const sr = lastSignalSR;
+  const fftSize = 2048;
+  const numBins = fftSize / 2;
+
+  // Compute average spectrum using OfflineAudioContext
+  // For speed, just compute it from the stored spectrogram data if we have HPSS
+  // Otherwise, do a quick manual approximation: take multiple chunks and average their power
+
+  // Quick approach: sample N chunks, compute power via autocorrelation approximation
+  // Actually let's use the simpler approach: compute average magnitude from the PCM
+  // by doing overlapping FFTs... but we don't have FFT in JS.
+
+  // Simplest correct approach: use an OfflineAudioContext to get the spectrum
+  // But that's async. Let's do it inline.
+
+  // Alternative: compute power spectrum from the raw PCM chunks
+  // We'll use a Hann-windowed, zero-padded approach via the existing HPSS spectrogram
+  // if available, or compute a rough average.
+
+  // For now, compute RMS energy per frequency band using a bank of simple filters
+  // Actually the most practical: compute the average of all spectrogram frames from HPSS
+  // since we already computed the full spectrogram there.
+
+  // We'll store the spectrogram in HPSS result and reuse it.
+  // But HPSS might not have run. Let's compute a quick spectrum inline.
+
+  // Quick spectrum: take 50 evenly-spaced chunks, get FFT via OfflineAudioContext
+  // That's too slow for inline. Let's just estimate using band energy.
+
+  // Simplest approach that works: manually compute DFT for a few chunks
+  // Actually, let's just run a quick offline spectrum analysis.
+
+  // PRAGMATIC: compute band-level RMS from the raw PCM
+  const bandEdges = [0, 40, 80, 150, 300, 500, 1000, 2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 20000];
+  const bandLabels = ['0', '40', '80', '150', '300', '500', '1k', '2k', '4k', '6k', '8k', '10k', '12k', '14k', '16k', '20k'];
+
+  // We need actual spectral data. The best we can do without a JS FFT is to use
+  // the flux envelope data from one of the 9 configs, but that only gives us broadband flux.
+
+  // Let's store the average spectrum during HPSS and draw it.
+  // For now, draw a placeholder that shows band energies from the per-band onset counts.
+
+  // Better approach: use the per-band onset counts as a proxy for energy.
+  // More onsets in a band = more energy in that band. Not perfect but informative.
+
+  // BEST approach available: run a quick OfflineAudioContext analysis
+  // Let's do it async and draw when ready.
+  computeAndDrawSpectrum(canvas, ctx, W, H, margin, signal, sr);
+}
+
+function computeAndDrawSpectrum(canvas, ctx, W, H, margin, signal, sr) {
+  const fftSize = 2048;
+  const numBins = fftSize / 2;
+  const hopSize = fftSize; // non-overlapping for speed
+  const numChunks = Math.min(200, Math.floor(signal.length / hopSize));
+
+  if (numChunks < 2) return;
+
+  const offlineCtx = new OfflineAudioContext(1, signal.length, sr);
+  const buffer = offlineCtx.createBuffer(1, signal.length, sr);
+  buffer.getChannelData(0).set(signal);
+
+  const source = offlineCtx.createBufferSource();
+  source.buffer = buffer;
+
+  const analyser = offlineCtx.createAnalyser();
+  analyser.fftSize = fftSize;
+  analyser.smoothingTimeConstant = 0;
+
+  const proc = offlineCtx.createScriptProcessor(fftSize, 1, 1);
+  const specBuf = new Float32Array(analyser.frequencyBinCount);
+
+  // Accumulate average spectrum in dB
+  const avgSpectrum = new Float64Array(analyser.frequencyBinCount);
+  let frameCount = 0;
+
+  proc.onaudioprocess = function(e) {
+    analyser.getFloatFrequencyData(specBuf);
+    for (let i = 0; i < specBuf.length; i++) {
+      avgSpectrum[i] += specBuf[i];
+    }
+    frameCount++;
+  };
+
+  source.connect(analyser);
+  analyser.connect(proc);
+  proc.connect(offlineCtx.destination);
+  source.start(0);
+
+  offlineCtx.startRendering().then(function() {
+    // Average
+    for (let i = 0; i < avgSpectrum.length; i++) {
+      avgSpectrum[i] /= frameCount;
+    }
+
+    // Draw
+    const plotW = W - margin.left - margin.right;
+    const plotH = H - margin.top - margin.bottom;
+    const binHz = sr / fftSize;
+
+    // Use log frequency scale
+    const minFreq = 30;
+    const maxFreq = Math.min(20000, sr / 2);
+    const logMin = Math.log10(minFreq);
+    const logMax = Math.log10(maxFreq);
+
+    function freqToX(f) {
+      if (f <= 0) return margin.left;
+      const logF = Math.log10(Math.max(f, minFreq));
+      return margin.left + ((logF - logMin) / (logMax - logMin)) * plotW;
+    }
+
+    // Find dB range
+    let dbMin = 0, dbMax = -200;
+    for (let i = 1; i < avgSpectrum.length; i++) {
+      const freq = i * binHz;
+      if (freq < minFreq || freq > maxFreq) continue;
+      if (avgSpectrum[i] > dbMax) dbMax = avgSpectrum[i];
+      if (avgSpectrum[i] < dbMin && avgSpectrum[i] > -120) dbMin = avgSpectrum[i];
+    }
+    dbMin = Math.max(dbMin, dbMax - 80); // 80dB dynamic range
+
+    function dbToY(db) {
+      return margin.top + (1 - (db - dbMin) / (dbMax - dbMin)) * plotH;
+    }
+
+    // Draw spectrum curve
+    ctx.strokeStyle = '#2dd4bf';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let started = false;
+    for (let i = 1; i < avgSpectrum.length; i++) {
+      const freq = i * binHz;
+      if (freq < minFreq || freq > maxFreq) continue;
+      const x = freqToX(freq);
+      const y = dbToY(Math.max(avgSpectrum[i], dbMin));
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Fill under curve
+    ctx.lineTo(freqToX(maxFreq), margin.top + plotH);
+    ctx.lineTo(freqToX(minFreq), margin.top + plotH);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(45,212,191,0.1)';
+    ctx.fill();
+
+    // Band boundary lines (v2 bands)
+    const bandBoundaries = [
+      { freq: 40, label: '40' },
+      { freq: 150, label: '150' },
+      { freq: 400, label: '400' },
+      { freq: 2000, label: '2k' },
+      { freq: 5000, label: '5k' },
+      { freq: 6000, label: '6k' },
+      { freq: 16000, label: '16k' }
+    ];
+
+    ctx.setLineDash([3, 3]);
+    ctx.lineWidth = 1;
+    for (const b of bandBoundaries) {
+      const x = freqToX(b.freq);
+      ctx.strokeStyle = 'rgba(251,191,36,0.4)';
+      ctx.beginPath();
+      ctx.moveTo(x, margin.top);
+      ctx.lineTo(x, margin.top + plotH);
+      ctx.stroke();
+      ctx.fillStyle = '#fbbf24';
+      ctx.font = '8px -apple-system, sans-serif';
+      ctx.fillText(b.label, x + 2, margin.top + 10);
+    }
+    ctx.setLineDash([]);
+
+    // Band labels
+    const bandZones = [
+      { start: 40, end: 150, label: 'KICK', color: 'rgba(251,113,133,0.15)' },
+      { start: 150, end: 400, label: 'BASS', color: 'rgba(167,139,250,0.1)' },
+      { start: 400, end: 2000, label: 'MID', color: 'rgba(107,114,128,0.1)' },
+      { start: 2000, end: 5000, label: 'SNARE', color: 'rgba(251,191,36,0.1)' },
+      { start: 6000, end: 16000, label: 'HI-HAT', color: 'rgba(45,212,191,0.1)' }
+    ];
+    for (const zone of bandZones) {
+      const x1 = freqToX(zone.start);
+      const x2 = freqToX(zone.end);
+      ctx.fillStyle = zone.color;
+      ctx.fillRect(x1, margin.top, x2 - x1, plotH);
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '9px -apple-system, sans-serif';
+      ctx.fillText(zone.label, (x1 + x2) / 2 - 12, margin.top + plotH - 4);
+    }
+
+    // Frequency axis labels
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '9px -apple-system, sans-serif';
+    var freqLabels = [50, 100, 200, 500, 1000, 2000, 5000, 10000];
+    for (const f of freqLabels) {
+      const x = freqToX(f);
+      const label = f >= 1000 ? (f / 1000) + 'kHz' : f + 'Hz';
+      ctx.fillText(label, x - 12, H - 4);
+    }
+
+    // dB axis labels
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '9px -apple-system, sans-serif';
+    const dbStep = 10;
+    for (let db = Math.ceil(dbMin / dbStep) * dbStep; db <= dbMax; db += dbStep) {
+      const y = dbToY(db);
+      ctx.fillText(db + 'dB', 2, y + 3);
+      ctx.strokeStyle = 'rgba(42,45,58,0.5)';
+      ctx.beginPath();
+      ctx.moveTo(margin.left, y);
+      ctx.lineTo(W - margin.right, y);
+      ctx.stroke();
+    }
+  });
+}
+
+// ── Band Table ──
+function renderBandTable() {
+  const table = document.getElementById('band-table');
+  let html = '<thead><tr><th>Config</th>';
+  for (const b of BAND_FREQS) html += '<th>' + b.label + '</th>';
+  html += '<th>Total</th></tr></thead><tbody>';
+
+  // Find max per band for highlighting
+  const maxPerBand = {};
+  for (const b of BAND_FREQS) {
+    maxPerBand[b.name] = 0;
+    for (const r of allResults) {
+      const count = r.bandOnsets[b.name] ? r.bandOnsets[b.name].length : 0;
+      if (count > maxPerBand[b.name]) maxPerBand[b.name] = count;
+    }
+  }
+
+  for (let i = 0; i < allResults.length; i++) {
+    const r = allResults[i];
+    html += '<tr><td style="color:' + CONFIG_COLORS[i] + '">' + r.config.label + '</td>';
+    for (const b of BAND_FREQS) {
+      const count = r.bandOnsets[b.name] ? r.bandOnsets[b.name].length : 0;
+      const cls = count === maxPerBand[b.name] && count > 0 ? 'val-good' : '';
+      html += '<td class="' + cls + '">' + count + '</td>';
+    }
+    html += '<td>' + r.onsets.length + '</td></tr>';
+  }
+
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+// ── V2 Band Table ──
+function renderBandTableV2() {
+  const table = document.getElementById('band-table-v2');
+  let html = '<thead><tr><th>Config</th>';
+  for (const b of BAND_FREQS_V2) html += '<th>' + b.label + '</th>';
+  html += '<th>Total</th></tr></thead><tbody>';
+
+  const maxPerBand = {};
+  for (const b of BAND_FREQS_V2) {
+    maxPerBand[b.name] = 0;
+    for (const r of allResults) {
+      const count = r.bandOnsetsV2[b.name] ? r.bandOnsetsV2[b.name].length : 0;
+      if (count > maxPerBand[b.name]) maxPerBand[b.name] = count;
+    }
+  }
+
+  for (let i = 0; i < allResults.length; i++) {
+    const r = allResults[i];
+    html += '<tr><td style="color:' + CONFIG_COLORS[i] + '">' + r.config.label + '</td>';
+    for (const b of BAND_FREQS_V2) {
+      const count = r.bandOnsetsV2[b.name] ? r.bandOnsetsV2[b.name].length : 0;
+      const cls = count === maxPerBand[b.name] && count > 0 ? 'val-good' : '';
+      html += '<td class="' + cls + '">' + count + '</td>';
+    }
+    html += '<td>' + r.onsets.length + '</td></tr>';
+  }
+
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+// ── Performance Table ──
+function renderPerfTable() {
+  const table = document.getElementById('perf-table');
+  let html = '<thead><tr><th>Config</th><th>CPU Time</th><th>Frame Rate</th><th>Time/Frame</th>' +
+    '<th>Onsets</th><th>Flux Frames</th>';
+  if (performance.memory) html += '<th>Heap \u0394</th>';
+  html += '</tr></thead><tbody>';
+
+  for (let i = 0; i < allResults.length; i++) {
+    const r = allResults[i];
+    const timePerFrame = (1000 / r.frameRate).toFixed(1);
+    html += '<tr><td style="color:' + CONFIG_COLORS[i] + '">' + r.config.label + '</td>' +
+      '<td>' + r.cpuTimeMs.toFixed(0) + ' ms</td>' +
+      '<td>' + r.frameRate.toFixed(0) + ' fps</td>' +
+      '<td>' + timePerFrame + ' ms</td>' +
+      '<td>' + r.onsets.length + '</td>' +
+      '<td>' + r.fluxEnvelope.length + '</td>';
+    if (performance.memory) {
+      const mb = (r.memoryDelta / (1024 * 1024)).toFixed(1);
+      html += '<td>' + mb + ' MB</td>';
+    }
+    html += '</tr>';
+  }
+
+  // Essentia row
+  if (essentiaResult) {
+    html += '<tr><td style="color:#a78bfa">Essentia.js</td>' +
+      '<td>' + essentiaResult.cpuTimeMs.toFixed(0) + ' ms</td>' +
+      '<td colspan="3">BPM: ' + (essentiaResult.bpm ? essentiaResult.bpm.toFixed(1) : 'N/A') +
+      ', Beats: ' + essentiaResult.beatTimesMs.length + '</td>' +
+      '<td>\u2014</td>';
+    if (performance.memory) html += '<td>\u2014</td>';
+    html += '</tr>';
+  }
+
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+// ── Flux Overlay ──
+function renderFluxOverlay() {
+  const canvas = document.getElementById('flux-canvas');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.offsetWidth * dpr;
+  canvas.height = 200 * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const W = canvas.offsetWidth;
+  const H = 200;
+
+  ctx.fillStyle = '#0f1117';
+  ctx.fillRect(0, 0, W, H);
+
+  // Show first 5 seconds
+  const maxTimeMs = 5000;
+  const margin = 10;
+
+  for (let i = 0; i < allResults.length; i++) {
+    const r = allResults[i];
+    const color = CONFIG_COLORS[i];
+    const env = r.fluxEnvelope;
+    if (env.length === 0) continue;
+
+    // Find peak in window
+    let peak = 0.001;
+    for (const f of env) {
+      if (f.time <= maxTimeMs && f.flux > peak) peak = f.flux;
+    }
+
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    let started = false;
+    for (const f of env) {
+      if (f.time > maxTimeMs) break;
+      const x = margin + (f.time / maxTimeMs) * (W - 2 * margin);
+      const y = H - margin - (f.flux / peak) * (H - 2 * margin);
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // Time markers
+  ctx.fillStyle = '#6b7280';
+  ctx.font = '9px -apple-system, sans-serif';
+  for (let s = 0; s <= 5; s++) {
+    const x = margin + (s / 5) * (W - 2 * margin);
+    ctx.fillText(s + 's', x, H - 1);
+  }
+}
+
+// ── Essentia Panel ──
+function renderEssentiaPanel() {
+  const panel = document.getElementById('essentia-panel');
+  if (!essentiaResult) { panel.style.display = 'none'; return; }
+
+  panel.style.display = '';
+  document.getElementById('essentia-results').innerHTML =
+    '<div style="display:flex;gap:20px;flex-wrap:wrap;">' +
+    '<div><span style="font-size:11px;color:var(--text-tertiary)">BPM</span><br>' +
+    '<span style="font-size:18px;font-weight:700">' +
+    (essentiaResult.bpm ? essentiaResult.bpm.toFixed(1) : 'N/A') + '</span></div>' +
+    '<div><span style="font-size:11px;color:var(--text-tertiary)">Beats</span><br>' +
+    '<span style="font-size:18px;font-weight:700">' + essentiaResult.beatTimesMs.length + '</span></div>' +
+    '<div><span style="font-size:11px;color:var(--text-tertiary)">CPU Time</span><br>' +
+    '<span style="font-size:18px;font-weight:700">' + essentiaResult.cpuTimeMs.toFixed(0) + ' ms</span></div>' +
+    '</div>';
+}
+
+// ── Ground Truth Table ──
+function renderGroundTruthTable() {
+  const panel = document.getElementById('gt-panel');
+  if (groundTruthBeats.length === 0) { panel.style.display = 'none'; return; }
+
+  panel.style.display = '';
+  const table = document.getElementById('gt-table');
+
+  const bpmInput = document.getElementById('gt-bpm').value;
+  const bpm = bpmInput ? parseFloat(bpmInput) : 0;
+  const beatMs = bpm > 0 ? 60000 / bpm : 0;
+
+  let html = '<thead><tr><th>Config</th><th>Precision</th><th>Recall</th><th>F-Measure</th>' +
+    '<th>True Pos</th><th>False Pos</th><th>Missed</th><th>Mean Err</th><th>Std Err</th></tr></thead><tbody>';
+
+  for (let i = 0; i < allResults.length; i++) {
+    const r = allResults[i];
+
+    // Per-config phase alignment: generate a ground truth grid aligned to THIS config's onsets
+    let gtBeats = groundTruthBeats;
+    if (beatMs > 0 && r.onsets.length > 4) {
+      const phase = findBestPhase(r.onsets, beatMs);
+      const totalMs = pcmChunks.reduce(function(s, c) { return s + c.length; }, 0) / capturedSampleRate * 1000;
+      gtBeats = [];
+      for (let t = phase; t < totalMs; t += beatMs) {
+        gtBeats.push(t);
+      }
+    }
+
+    const cmp = compareOnsets(r.onsets, gtBeats, 70);
+    if (!cmp) continue;
+
+    const pClass = cmp.precision > 0.8 ? 'val-good' : cmp.precision > 0.5 ? 'val-warn' : 'val-bad';
+    const rClass = cmp.recall > 0.8 ? 'val-good' : cmp.recall > 0.5 ? 'val-warn' : 'val-bad';
+    const fClass = cmp.fMeasure > 0.8 ? 'val-good' : cmp.fMeasure > 0.5 ? 'val-warn' : 'val-bad';
+
+    html += '<tr><td style="color:' + CONFIG_COLORS[i] + '">' + r.config.label + '</td>' +
+      '<td class="' + pClass + '">' + (cmp.precision * 100).toFixed(1) + '%</td>' +
+      '<td class="' + rClass + '">' + (cmp.recall * 100).toFixed(1) + '%</td>' +
+      '<td class="' + fClass + '">' + (cmp.fMeasure * 100).toFixed(1) + '%</td>' +
+      '<td>' + cmp.truePositives + '</td>' +
+      '<td>' + cmp.falsePositives + '</td>' +
+      '<td>' + cmp.falseNegatives + '</td>' +
+      '<td>' + (cmp.meanError >= 0 ? '+' : '') + cmp.meanError.toFixed(1) + ' ms</td>' +
+      '<td>\u00B1' + cmp.stdError.toFixed(1) + ' ms</td></tr>';
+  }
+
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+// Store results for console access
+window._allResults = function() { return allResults; };
+window._essentiaResult = function() { return essentiaResult; };
+window._groundTruth = function() { return groundTruthBeats; };
+</script>
+
+</body>
+</html>
