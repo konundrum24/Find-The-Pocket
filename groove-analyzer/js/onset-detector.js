@@ -291,22 +291,26 @@ const OnsetDetector = (() => {
    * Enable/disable onset detection.
    * @param {boolean} val - true to enable, false to disable
    * @param {Object} [opts] - options
-   * @param {boolean} [opts.keepGain] - if true, preserve current auto-gain setting
-   *   (use when transitioning from sound check to recording — gain is already calibrated)
+   * @param {boolean} [opts.keepGain] - if true, do a full reset but preserve the
+   *   auto-gain setting (use when transitioning from sound check to recording —
+   *   gain is already calibrated but all detection state must start fresh)
    */
   function setActive(val, opts) {
     active = val;
     if (val) {
-      pendingOnsets = [];
-      pcmChunks = [];
-      pcmStartTime = 0;
-      if (!(opts && opts.keepGain)) {
+      if (opts && opts.keepGain && gainNode) {
+        // Save calibrated gain, do full reset, restore gain
+        const savedGain = gainNode.gain.value;
+        reset();
+        gainNode.gain.value = savedGain;
+        autoGainFrames = AUTO_GAIN_WINDOW; // skip re-measurement
+      } else {
+        pendingOnsets = [];
+        pcmChunks = [];
+        pcmStartTime = 0;
         autoGainFrames = 0;
         autoGainPeak = 0;
-        if (gainNode) gainNode.gain.value = 1; // reset to unity for new measurement
-      } else {
-        // Keep existing gain but mark auto-gain as complete so it won't re-measure
-        autoGainFrames = AUTO_GAIN_WINDOW;
+        if (gainNode) gainNode.gain.value = 1;
       }
     }
   }
