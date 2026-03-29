@@ -191,10 +191,15 @@ const AdaptiveGrid = (() => {
   // ── Grid Building ──
 
   /**
-   * Build a 16th-note grid that adapts to local tempo between anchors.
+   * Build an adaptive grid at a given subdivision level.
+   *
+   * @param {Array} anchors - beat anchors (quarter-note positions)
+   * @param {number} [subdivisions=4] - subdivisions per beat: 1=quarter, 2=8th, 4=16th
+   * @returns {object|null} grid with points, localTempos, anchors, medianBeatMs, etc.
    */
-  function buildAdaptiveGrid(anchors) {
+  function buildAdaptiveGrid(anchors, subdivisions) {
     if (anchors.length < 2) return null;
+    if (subdivisions === undefined) subdivisions = 4;
 
     const points = [];
     const localTempos = [];
@@ -204,11 +209,11 @@ const AdaptiveGrid = (() => {
       const b = anchors[i + 1];
       const localBeatMs = b.time - a.time;
       const localBpm = 60000 / localBeatMs;
-      const gridUnitMs = localBeatMs / 4;
+      const gridUnitMs = localBeatMs / subdivisions;
 
       localTempos.push({ time: a.time, bpm: localBpm, beatMs: localBeatMs });
 
-      for (let sub = 0; sub < 4; sub++) {
+      for (let sub = 0; sub < subdivisions; sub++) {
         points.push({
           time: a.time + sub * gridUnitMs,
           beatPosition: sub,
@@ -242,12 +247,31 @@ const AdaptiveGrid = (() => {
       localTempos,
       anchors,
       medianBeatMs,
-      medianGridUnitMs: medianBeatMs / 4,
-      subdivisions: 4
+      medianGridUnitMs: medianBeatMs / subdivisions,
+      subdivisions
     };
   }
 
   // ── Onset Matching ──
+
+  /**
+   * Binary search for the nearest grid point to a given time.
+   * Grid points must be sorted by time (they are, by construction).
+   */
+  function findNearestGridPoint(points, time) {
+    let lo = 0, hi = points.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (points[mid].time < time) lo = mid + 1;
+      else hi = mid;
+    }
+    // lo is the first point >= time. Check lo and lo-1 for nearest.
+    let best = lo;
+    if (lo > 0 && Math.abs(points[lo - 1].time - time) < Math.abs(points[lo].time - time)) {
+      best = lo - 1;
+    }
+    return points[best];
+  }
 
   /**
    * Match all onsets to the adaptive grid.
@@ -255,22 +279,13 @@ const AdaptiveGrid = (() => {
    */
   function matchToAdaptiveGrid(onsets, grid) {
     const matched = [];
+    const points = grid.points;
+    if (points.length === 0) return matched;
 
     for (const onset of onsets) {
-      let nearest = null;
-      let minDist = Infinity;
+      const nearest = findNearestGridPoint(points, onset.time);
 
-      for (const gp of grid.points) {
-        const dist = Math.abs(onset.time - gp.time);
-        if (dist < minDist) {
-          minDist = dist;
-          nearest = gp;
-        }
-      }
-
-      if (!nearest) continue;
-
-      const localGridUnit = nearest.localBeatMs / 4;
+      const localGridUnit = nearest.localBeatMs / (grid.subdivisions || 4);
       const maxOffset = localGridUnit * 0.35;
       const offset = onset.time - nearest.time;
 
@@ -291,6 +306,82 @@ const AdaptiveGrid = (() => {
     }
 
     return matched;
+  }
+
+  // ── Per-Instrument Grid Resolution Selection ──
+
+  /**
+   * Find the best grid resolution for a set of onsets.
+   *
+   * Tests quarter-note (1), 8th-note (2), and 16th-note (4) grids.
+   * Scores each by match rate and offset consistency. The resolution
+   * where the instrument's onsets cluster most tightly around grid
+   * points — with the highest coverage — wins.
+   *
+   * @param {Array<{time: number, amplitude: number}>} onsets - instrument onsets
+   * @param {Array} anchors - quarter-note beat anchors from Essentia or periodicity
+   * @returns {{ grid: object, subdivisions: number, label: string, matchRate: number, consistency: number, score: number }}
+   */
+  function selectBestResolution(onsets, anchors) {
+    const candidates = [
+      { subdivisions: 1, label: 'quarter' },
+      { subdivisions: 2, label: '8th' },
+      { subdivisions: 4, label: '16th' }
+    ];
+
+    let best = null;
+
+    for (const candidate of candidates) {
+      const grid = buildAdaptiveGrid(anchors, candidate.subdivisions);
+      if (!grid) continue;
+
+      const matched = matchToAdaptiveGrid(onsets, grid);
+      const matchRate = matched.length / onsets.length;
+
+      if (matched.length < 3) {
+        // Not enough matches to evaluate — skip
+        continue;
+      }
+
+      const offsets = matched.map(o => o.offset);
+      const avg = offsets.reduce((a, b) => a + b, 0) / offsets.length;
+      const sd = Math.sqrt(offsets.reduce((a, b) => a + (b - avg) ** 2, 0) / offsets.length);
+
+      // Score: high match rate + tight consistency.
+      // matchRate is 0-1, consistency penalty is normalized by the grid unit
+      // so that tighter grids aren't unfairly penalized for smaller absolute SD.
+      const gridUnitMs = grid.medianGridUnitMs;
+      const normalizedSD = sd / gridUnitMs; // 0 = perfect, 0.35 = at maxOffset edge
+      const score = matchRate - (normalizedSD * 0.5);
+
+      if (!best || score > best.score) {
+        best = {
+          grid,
+          subdivisions: candidate.subdivisions,
+          label: candidate.label,
+          matchRate,
+          consistency: sd,
+          score,
+          matched
+        };
+      }
+    }
+
+    // Fallback to 16th if nothing scored (shouldn't happen with valid data)
+    if (!best) {
+      const grid = buildAdaptiveGrid(anchors, 4);
+      return {
+        grid,
+        subdivisions: 4,
+        label: '16th',
+        matchRate: 0,
+        consistency: 0,
+        score: 0,
+        matched: grid ? matchToAdaptiveGrid(onsets, grid) : []
+      };
+    }
+
+    return best;
   }
 
   // ── Tempo Curve ──
@@ -354,6 +445,7 @@ const AdaptiveGrid = (() => {
     pulseToAnchors,
     buildAdaptiveGrid,
     matchToAdaptiveGrid,
+    selectBestResolution,
     shiftGridPhase,
     getTempoFromAnchors,
     getGlobalBpm

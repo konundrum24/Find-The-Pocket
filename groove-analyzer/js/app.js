@@ -998,6 +998,9 @@ const App = (() => {
       return;
     }
 
+    console.log('[Groove] ⏱ Stop: beginning analysis, ' + freePlayOnsetTimes.length + ' onsets');
+    const tStop = performance.now();
+
     // Primary tempo: autocorrelation of the continuous flux envelope.
     // This is independent of onset detection sensitivity — it uses the
     // raw spectral flux signal, not the detected onset timestamps.
@@ -1032,6 +1035,8 @@ const App = (() => {
     // Get raw PCM for Essentia beat tracking
     const pcmData = OnsetDetector.getPcmSignal();
 
+    console.log('[Groove] ⏱ Tempo estimation:', Math.round(performance.now() - tStop) + 'ms');
+
     // Try adaptive grid first (with Essentia beats, falling back to custom)
     const session = analyzeFreePlayAdaptive(coarseBpm, pcmData);
     if (!session) return;
@@ -1046,6 +1051,7 @@ const App = (() => {
    */
   function analyzeFreePlayAdaptive(coarseBpm, pcmData) {
     console.log('[Groove] coarse BPM from autocorrelation:', Math.round(coarseBpm));
+    const t0 = performance.now();
 
     let anchors = null;
 
@@ -1062,6 +1068,7 @@ const App = (() => {
       if (anchors) {
         console.log('[Groove] Using Essentia.js beat positions (' + anchors.length + ' anchors)');
       }
+      console.log('[Groove] ⏱ Essentia:', Math.round(performance.now() - t0) + 'ms');
     }
 
     // Fallback: custom periodicity pipeline if Essentia unavailable or failed
@@ -1123,8 +1130,13 @@ const App = (() => {
       console.log('[Groove] Swing: ' + swingResult.swingPercent + '% (' + swingResult.swingLabel + ', ' + swingResult.sampleCount + ' samples)');
     }
 
-    // ── Per-band analysis ──
-    // Match each frequency band's onsets against the adaptive grid
+    console.log('[Groove] ⏱ Grid + broadband matching:', Math.round(performance.now() - t0) + 'ms');
+    const tBand = performance.now();
+
+    // ── Per-band analysis with pattern detection ──
+    // Strategy: for each band, try pattern detection first (detects repeating
+    // rhythmic figures like a syncopated kick pattern). If no clear pattern
+    // is found, fall back to adaptive resolution selection (quarter/8th/16th).
     const bandOnsets = OnsetDetector.getBandOnsets();
     const bands = OnsetDetector.getBands();
     const bandAnalysis = [];
@@ -1142,8 +1154,39 @@ const App = (() => {
         amplitude: o.amplitude
       }));
 
-      // Match to the adaptive grid
-      const matched = AdaptiveGrid.matchToAdaptiveGrid(normalizedOnsets, grid);
+      // Try pattern detection first
+      let matched = null;
+      let gridLabel = '';
+      let matchRate = 0;
+      let patternInfo = null;
+      const tBandStart = performance.now();
+
+      const pattern = PatternGrid.detectPattern(normalizedOnsets, anchors);
+      if (pattern) {
+        const pGrid = PatternGrid.buildPatternGrid(pattern, anchors, grid);
+        matched = PatternGrid.matchToPatternGrid(normalizedOnsets, pGrid);
+        matchRate = matched.length / normalizedOnsets.length;
+        gridLabel = pattern.cycleLength + '-beat pattern (' + pattern.positions.length + ' positions)';
+        patternInfo = {
+          cycleLength: pattern.cycleLength,
+          positionCount: pattern.positions.length,
+          positions: pattern.positions,
+          coverageRatio: pattern.coverageRatio
+        };
+        console.log('[Groove] Band "' + band.label + '": pattern detected — ' +
+          pattern.cycleLength + '-beat cycle, ' + pattern.positions.length + ' positions, ' +
+          Math.round(pattern.coverageRatio * 100) + '% coverage');
+      }
+
+      // Fall back to adaptive resolution if pattern didn't match well
+      if (!matched || matched.length < 4) {
+        const best = AdaptiveGrid.selectBestResolution(normalizedOnsets, anchors);
+        matched = best.matched;
+        matchRate = best.matchRate;
+        gridLabel = best.label + '-note grid';
+        patternInfo = null;
+      }
+
       if (matched.length < 4) {
         bandAnalysis.push({ name: band.name, label: band.label, count: matched.length });
         continue;
@@ -1160,12 +1203,20 @@ const App = (() => {
         position: avg,
         consistency: sd,
         count: matched.length,
-        onsets: matched
+        onsets: matched,
+        gridResolution: gridLabel,
+        matchRate: matchRate,
+        pattern: patternInfo
       });
+      console.log('[Groove] ⏱ Band "' + band.label + '": ' +
+        Math.round(performance.now() - tBandStart) + 'ms');
       console.log('[Groove] Band "' + band.label + '": position=' +
         (avg >= 0 ? '+' : '') + avg.toFixed(1) + 'ms, consistency=±' +
-        sd.toFixed(1) + 'ms (' + matched.length + ' onsets)');
+        sd.toFixed(1) + 'ms (' + matched.length + ' onsets, ' +
+        gridLabel + ', ' + Math.round(matchRate * 100) + '% matched)');
     }
+
+    console.log('[Groove] ⏱ All band analysis:', Math.round(performance.now() - tBand) + 'ms');
 
     // ── Drum attribution (v3 — hybrid approach) ──
     // Groups simultaneous per-band onsets into single drum events, classifies by
@@ -1542,12 +1593,17 @@ const App = (() => {
           if (band.position !== undefined) {
             const posStr = (band.position >= 0 ? '+' : '') + Math.round(band.position) + 'ms';
             const conStr = '\u00b1' + Math.round(band.consistency) + 'ms';
+            const gridLabel = band.gridResolution
+              ? '<div class="band-card-grid">' + band.gridResolution + ' \u00b7 ' +
+                Math.round((band.matchRate || 0) * 100) + '% matched</div>'
+              : '';
             card.innerHTML =
               '<div class="band-card-label">' + band.label + '</div>' +
               '<canvas class="band-pocket-canvas"></canvas>' +
               '<div class="band-card-position">' + posStr + '</div>' +
               '<div class="band-card-consistency">' + conStr + '</div>' +
-              '<div class="band-card-count">' + band.count + ' onsets</div>';
+              '<div class="band-card-count">' + band.count + ' onsets</div>' +
+              gridLabel;
           } else {
             card.innerHTML =
               '<div class="band-card-label">' + band.label + '</div>' +

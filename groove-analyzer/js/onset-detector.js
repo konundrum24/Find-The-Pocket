@@ -23,6 +23,9 @@ const OnsetDetector = (() => {
   let autoGainFrames = 0;
   let autoGainPeak = 0;
   const AUTO_GAIN_WINDOW = 40;  // ~0.5s at 512-sample buffers / 44.1kHz
+  const WARMUP_FRAMES = AUTO_GAIN_WINDOW + 5; // suppress onsets until gain + prevSpectrum stabilize
+  let warmupRemaining = 0;
+  let warming = false;
   const TARGET_PEAK = 0.25;     // target peak amplitude (linear, ~-12 dBFS)
   const MAX_GAIN = 32;          // max boost (30 dB) — avoids runaway on silence
   const MIN_GAIN = 1;           // never attenuate
@@ -47,12 +50,16 @@ const OnsetDetector = (() => {
   // ── Frequency band definitions (v2 — attack transient focused) ──
   // Tuned for drum onset detection. Bin boundaries for 44.1kHz, FFT_SIZE=1024 (~43Hz/bin).
   // v2 bands separate kick body, bass resonance, mid, snare crack, and hi-hat shimmer.
+  // sensScale: per-band sensitivity multiplier applied to the global threshold.
+  // >1 = less sensitive (higher threshold), <1 = more sensitive (lower threshold).
+  // Hi-hat energy through speakers is 10-100x quieter than kick, so it needs a
+  // much lower effective threshold to catch closed hi-hats.
   const BANDS = [
-    { name: 'kick',   label: 'Kick (40–150 Hz)',        binStart: 1,   binEnd: 4   },  // ~43–172 Hz
-    { name: 'bass',   label: 'Bass (150–400 Hz)',       binStart: 4,   binEnd: 9   },  // ~172–387 Hz
-    { name: 'mid',    label: 'Mid (400 Hz–2 kHz)',      binStart: 9,   binEnd: 47  },  // ~387–2025 Hz
-    { name: 'snare',  label: 'Snare Crack (2–5 kHz)',   binStart: 47,  binEnd: 116 },  // ~2025–4996 Hz
-    { name: 'hihat',  label: 'Hi-hat (6–16 kHz)',       binStart: 140, binEnd: 372 }   // ~6029–16kHz
+    { name: 'kick',   label: 'Kick (40–150 Hz)',        binStart: 1,   binEnd: 4,   sensScale: 1.4 },  // ~43–172 Hz — raise threshold to reduce ghost triggers
+    { name: 'bass',   label: 'Bass (150–400 Hz)',       binStart: 4,   binEnd: 9,   sensScale: 1.2 },  // ~172–387 Hz
+    { name: 'mid',    label: 'Mid (400 Hz–2 kHz)',      binStart: 9,   binEnd: 47,  sensScale: 1.0 },  // ~387–2025 Hz
+    { name: 'snare',  label: 'Snare Crack (2–5 kHz)',   binStart: 47,  binEnd: 116, sensScale: 1.0 },  // ~2025–4996 Hz
+    { name: 'hihat',  label: 'Hi-hat (6–16 kHz)',       binStart: 140, binEnd: 372, sensScale: 0.4 }   // ~6029–16kHz — lower threshold to catch closed hi-hats
   ];
 
   // Minimum flux floor: eliminates room noise false positives.
@@ -128,7 +135,7 @@ const OnsetDetector = (() => {
         autoGainFrames++;
         if (autoGainFrames === AUTO_GAIN_WINDOW && autoGainPeak > 0.0001) {
           const desiredGain = Math.min(MAX_GAIN, Math.max(MIN_GAIN, TARGET_PEAK / autoGainPeak));
-          gainNode.gain.setValueAtTime(desiredGain, audioCtx.currentTime);
+          gainNode.gain.linearRampToValueAtTime(desiredGain, audioCtx.currentTime + 0.05);
           console.log('[Groove] Auto-gain: peak=' + autoGainPeak.toFixed(5) +
             ', boost=' + desiredGain.toFixed(1) + 'x (' + (20 * Math.log10(desiredGain)).toFixed(1) + ' dB)');
         }
@@ -199,6 +206,11 @@ const OnsetDetector = (() => {
         fluxEnvelope.push({ time: frameTimeMs, flux: flux });
         if (fluxFrameRate === 0) fluxFrameRate = sr / input.length;
 
+        // Warmup: let prevSpectrum + auto-gain stabilize before emitting onsets
+        // (hoisted to function scope so broadband detector can also check it)
+        warming = warmupRemaining > 0;
+        if (warming) warmupRemaining--;
+
         // ── Per-band onset detection (peak + parabolic interpolation) ──
         for (const band of BANDS) {
           const bs = bandState[band.name];
@@ -213,23 +225,25 @@ const OnsetDetector = (() => {
           bs.fluxEnvelope.push({ time: frameTimeMs, flux: bandFlux });
 
           // Peak detection: previous frame was a local max?
-          const bandThresh = (sensitivity / 100) * bs.peakEnv;
-          const isBandPrevPeak = bs.prevFlux > bandThresh
-            && bs.prevFlux > bs.prevPrevFlux * SPIKE_RATIO
-            && bs.prevFlux >= bandFlux;
-          const bandCooldownOk = (totalSamples - bs.lastOnsetSample) > cooldownSampleCount;
+          if (!warming) {
+            const bandThresh = (sensitivity / 100) * band.sensScale * bs.peakEnv;
+            const isBandPrevPeak = bs.prevFlux > bandThresh
+              && bs.prevFlux > bs.prevPrevFlux * SPIKE_RATIO
+              && bs.prevFlux >= bandFlux;
+            const bandCooldownOk = (totalSamples - bs.lastOnsetSample) > cooldownSampleCount;
 
-          if (isBandPrevPeak && bandCooldownOk && bs.prevFrameTimeMs > 0) {
-            // Parabolic interpolation for sub-frame timing
-            const denom = bs.prevPrevFlux - 2 * bs.prevFlux + bandFlux;
-            let delta = 0;
-            if (Math.abs(denom) > 1e-10) {
-              delta = 0.5 * (bs.prevPrevFlux - bandFlux) / denom;
-              delta = Math.max(-0.5, Math.min(0.5, delta));
+            if (isBandPrevPeak && bandCooldownOk && bs.prevFrameTimeMs > 0) {
+              // Parabolic interpolation for sub-frame timing
+              const denom = bs.prevPrevFlux - 2 * bs.prevFlux + bandFlux;
+              let delta = 0;
+              if (Math.abs(denom) > 1e-10) {
+                delta = 0.5 * (bs.prevPrevFlux - bandFlux) / denom;
+                delta = Math.max(-0.5, Math.min(0.5, delta));
+              }
+              const refinedTime = bs.prevFrameTimeMs + delta * frameDurationMs;
+              bs.lastOnsetSample = totalSamples - input.length;
+              bs.allOnsets.push({ time: refinedTime, amplitude: bs.prevFlux });
             }
-            const refinedTime = bs.prevFrameTimeMs + delta * frameDurationMs;
-            bs.lastOnsetSample = totalSamples - input.length;
-            bs.allOnsets.push({ time: refinedTime, amplitude: bs.prevFlux });
           }
 
           bs.prevPrevFlux = bs.prevFlux;
@@ -246,23 +260,26 @@ const OnsetDetector = (() => {
       }
 
       // Peak detection with sub-frame parabolic interpolation
-      const thresh = (sensitivity / 100) * peakEnv;
-      const isPrevPeak = prevFlux > thresh
-        && prevFlux > prevPrevFlux * SPIKE_RATIO
-        && prevFlux >= flux;
-      const cooldownOk = (totalSamples - lastOnsetSample) > cooldownSampleCount;
+      // (warmup gate: warming flag was set above in the active block)
+      if (!warming) {
+        const thresh = (sensitivity / 100) * peakEnv;
+        const isPrevPeak = prevFlux > thresh
+          && prevFlux > prevPrevFlux * SPIKE_RATIO
+          && prevFlux >= flux;
+        const cooldownOk = (totalSamples - lastOnsetSample) > cooldownSampleCount;
 
-      if (isPrevPeak && cooldownOk && prevFrameTimeMs > 0) {
-        // Parabolic interpolation: refine peak position between frames
-        const denom = prevPrevFlux - 2 * prevFlux + flux;
-        let delta = 0;
-        if (Math.abs(denom) > 1e-10) {
-          delta = 0.5 * (prevPrevFlux - flux) / denom;
-          delta = Math.max(-0.5, Math.min(0.5, delta));
+        if (isPrevPeak && cooldownOk && prevFrameTimeMs > 0) {
+          // Parabolic interpolation: refine peak position between frames
+          const denom = prevPrevFlux - 2 * prevFlux + flux;
+          let delta = 0;
+          if (Math.abs(denom) > 1e-10) {
+            delta = 0.5 * (prevPrevFlux - flux) / denom;
+            delta = Math.max(-0.5, Math.min(0.5, delta));
+          }
+          const refinedTime = prevFrameTimeMs + delta * frameDurationMs;
+          lastOnsetSample = totalSamples - input.length;
+          pendingOnsets.push({ time: refinedTime, amplitude: prevFlux });
         }
-        const refinedTime = prevFrameTimeMs + delta * frameDurationMs;
-        lastOnsetSample = totalSamples - input.length;
-        pendingOnsets.push({ time: refinedTime, amplitude: prevFlux });
       }
 
       prevPrevFlux = prevFlux;
@@ -296,6 +313,7 @@ const OnsetDetector = (() => {
       pcmStartTime = 0;
       autoGainFrames = 0;
       autoGainPeak = 0;
+      warmupRemaining = WARMUP_FRAMES;
       if (gainNode) gainNode.gain.value = 1; // reset to unity for new measurement
     }
   }
