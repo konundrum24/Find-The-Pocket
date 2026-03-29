@@ -378,6 +378,7 @@ function getBandBins(fftSize, sampleRate, bandDefs) {
 }
 
 const SPIKE_RATIO = 2.0;
+const MIN_FLUX_FLOOR = 1e-4; // absolute minimum flux to trigger an onset — filters room noise
 
 // ============================================
 // State
@@ -764,6 +765,7 @@ function runOnsetDetectionOffline(pcmSignal, sampleRate, config) {
         // Band peak detection with parabolic interpolation
         const bandThresh = (sens / 100) * bs.peakEnv;
         const isBandPrevPeak = bs.prevFlux > bandThresh
+          && bs.prevFlux > MIN_FLUX_FLOOR
           && bs.prevFlux > bs.prevPrevFlux * SPIKE_RATIO
           && bs.prevFlux >= bandFlux;
         const bandCooldownOk = (totalSamples - bs.lastOnsetSample) > cooldownSamples;
@@ -803,6 +805,7 @@ function runOnsetDetectionOffline(pcmSignal, sampleRate, config) {
       // Peak detection with parabolic interpolation (3-point)
       const thresh = (sens / 100) * peakEnv;
       const isPrevPeak = prevFlux > thresh
+        && prevFlux > MIN_FLUX_FLOOR
         && prevFlux > prevPrevFlux * SPIKE_RATIO
         && prevFlux >= flux;
       const cooldownOk = (totalSamples - lastOnsetSample) > cooldownSamples;
@@ -1235,6 +1238,7 @@ async function runHPSSAnalysis(pcmSignal, sampleRate) {
 
       const bandThresh = (sens / 100) * bs.peakEnv;
       const isBandPrevPeak = bs.prevFlux > bandThresh
+        && bs.prevFlux > MIN_FLUX_FLOOR
         && bs.prevFlux > bs.prevPrevFlux * SPIKE_RATIO
         && bs.prevFlux >= bandFlux;
       const bandCooldownOk = (totalSamples - bs.lastOnsetSample) > cooldownSamples;
@@ -1263,6 +1267,7 @@ async function runHPSSAnalysis(pcmSignal, sampleRate) {
 
     const thresh = (sens / 100) * peakEnv;
     const isPrevPeak = prevFlux > thresh
+      && prevFlux > MIN_FLUX_FLOOR
       && prevFlux > prevPrevFlux * SPIKE_RATIO
       && prevFlux >= flux;
     const cooldownOk = (totalSamples - lastOnsetSample) > cooldownSamples;
