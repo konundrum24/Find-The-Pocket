@@ -820,7 +820,7 @@ const App = (() => {
     document.getElementById('plh').textContent = '';
 
     Grid.startClick(tempo, Audio.getContext());
-    OnsetDetector.setActive(true);
+    OnsetDetector.setActive(true, { keepGain: true });
     startMainLoop();
 
     // Beat pulse
@@ -961,7 +961,10 @@ const App = (() => {
     // Reset live BPM estimation state
     startBpmEstimation();
 
-    OnsetDetector.setActive(true);
+    // keepGain: preserve auto-gain from sound check — it already calibrated
+    // the boost level for this mic/speaker setup. Resetting would drop gain
+    // to 1.0x for the first 0.5s, missing quiet hi-hats.
+    OnsetDetector.setActive(true, { keepGain: true });
     startMainLoop();
 
     // Timer
