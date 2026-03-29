@@ -287,43 +287,16 @@ const OnsetDetector = (() => {
     cooldownSampleCount = samples;
   }
 
-  /**
-   * Enable/disable onset detection.
-   * @param {boolean} val - true to enable, false to disable
-   * @param {Object} [opts] - options
-   * @param {boolean} [opts.keepGain] - if true, preserve gain AND signal calibration
-   *   (prevSpectrum, peakEnv, prevFlux) from sound check. Only clears accumulated
-   *   data (onsets, PCM, envelopes). This avoids the -Infinity spectrum spike that
-   *   occurs with a full reset(), which inflates peakEnv and suppresses detection.
-   */
-  function setActive(val, opts) {
+  /** Enable/disable onset detection. */
+  function setActive(val) {
     active = val;
     if (val) {
-      if (opts && opts.keepGain) {
-        // Soft reset: clear accumulated data but preserve signal calibration.
-        // Keep: gainNode.gain, prevSpectrum, peakEnv, prevFlux, prevPrevFlux
-        // Clear: onsets, PCM, envelopes, band onset arrays
-        pendingOnsets = [];
-        pcmChunks = [];
-        pcmStartTime = 0;
-        fluxEnvelope = [];
-        fluxFrameRate = 0;
-        autoGainFrames = AUTO_GAIN_WINDOW; // skip re-measurement
-        // Clear accumulated band onsets but keep per-band calibration
-        // (prevFlux, peakEnv, prevPrevFlux)
-        for (const band of BANDS) {
-          const bs = bandState[band.name];
-          bs.allOnsets = [];
-          bs.fluxEnvelope = [];
-        }
-      } else {
-        pendingOnsets = [];
-        pcmChunks = [];
-        pcmStartTime = 0;
-        autoGainFrames = 0;
-        autoGainPeak = 0;
-        if (gainNode) gainNode.gain.value = 1;
-      }
+      pendingOnsets = [];
+      pcmChunks = [];
+      pcmStartTime = 0;
+      autoGainFrames = 0;
+      autoGainPeak = 0;
+      if (gainNode) gainNode.gain.value = 1; // reset to unity for new measurement
     }
   }
 
