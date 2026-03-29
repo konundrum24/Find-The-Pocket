@@ -44,16 +44,20 @@ const OnsetDetector = (() => {
   let capturedSampleRate = 44100;
   let pcmStartTime = 0; // playbackTime (ms) of the first captured PCM chunk
 
-  // ── Frequency band definitions ──
-  // Each band gets its own flux stream and onset detection.
-  // Bin boundaries are for 44.1kHz with FFT_SIZE=1024 (~43Hz per bin).
+  // ── Frequency band definitions (v2 — attack transient focused) ──
+  // Tuned for drum onset detection. Bin boundaries for 44.1kHz, FFT_SIZE=1024 (~43Hz/bin).
+  // v2 bands separate kick body, bass resonance, mid, snare crack, and hi-hat shimmer.
   const BANDS = [
-    { name: 'subLow', label: 'Sub-Low (Kick)',       binStart: 1,  binEnd: 3   },  // ~43–129 Hz
-    { name: 'low',    label: 'Low (Bass)',            binStart: 3,  binEnd: 6   },  // ~129–258 Hz
-    { name: 'lowMid', label: 'Low-Mid (Snare)',      binStart: 6,  binEnd: 24  },  // ~258–1034 Hz
-    { name: 'mid',    label: 'Mid (Guitar/Keys)',     binStart: 24, binEnd: 94  },  // ~1034–4050 Hz
-    { name: 'high',   label: 'High (Hi-hat/Cymbal)',  binStart: 94, binEnd: 372 }   // ~4050–16kHz
+    { name: 'kick',   label: 'Kick (40–150 Hz)',        binStart: 1,   binEnd: 4   },  // ~43–172 Hz
+    { name: 'bass',   label: 'Bass (150–400 Hz)',       binStart: 4,   binEnd: 9   },  // ~172–387 Hz
+    { name: 'mid',    label: 'Mid (400 Hz–2 kHz)',      binStart: 9,   binEnd: 47  },  // ~387–2025 Hz
+    { name: 'snare',  label: 'Snare Crack (2–5 kHz)',   binStart: 47,  binEnd: 116 },  // ~2025–4996 Hz
+    { name: 'hihat',  label: 'Hi-hat (6–16 kHz)',       binStart: 140, binEnd: 372 }   // ~6029–16kHz
   ];
+
+  // Minimum flux floor: eliminates room noise false positives.
+  // Per-band flux below this value is treated as zero.
+  const MIN_FLUX_FLOOR = 1e-4;
 
   // Per-band state (initialized in start())
   let bandState = {};
@@ -169,7 +173,9 @@ const OnsetDetector = (() => {
             const diff = curr - prev;
             if (diff > 0) bandFlux += diff;
           }
-          bandFluxValues[band.name] = bandFlux / Math.max(1, bEnd - band.binStart);
+          bandFlux = bandFlux / Math.max(1, bEnd - band.binStart);
+          // Apply minimum flux floor to eliminate room noise false positives
+          bandFluxValues[band.name] = bandFlux < MIN_FLUX_FLOOR ? 0 : bandFlux;
         }
       }
 
@@ -356,7 +362,7 @@ const OnsetDetector = (() => {
 
   /**
    * Get all accumulated band onsets (for end-of-session analysis).
-   * Returns { subLow: [...], low: [...], lowMid: [...], mid: [...], high: [...] }
+   * Returns { kick: [...], bass: [...], mid: [...], snare: [...], hihat: [...] }
    * Each onset has { time, amplitude }.
    */
   function getBandOnsets() {

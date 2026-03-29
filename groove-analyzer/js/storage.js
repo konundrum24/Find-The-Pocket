@@ -98,6 +98,7 @@ const Storage = (() => {
       density: opts.density != null ? opts.density : null,
       densityLabel: opts.densityLabel || null,
       bandAnalysis: opts.bandAnalysis || null,
+      drumCounts: opts.drumCounts || null,
       swingPercent: opts.swingPercent != null ? opts.swingPercent : null,
       swingLabel: opts.swingLabel || null
     };

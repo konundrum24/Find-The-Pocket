@@ -291,6 +291,119 @@ const App = (() => {
     return anchors;
   }
 
+  // ── Drum Attribution (v3) ──
+  // Groups co-incident per-band onsets into single drum events, classifies each
+  // by frequency profile. Returns hybrid counts: attribution for kick/snare,
+  // raw band count for hi-hat (since hi-hat is masked by simultaneous kick/snare).
+  function runDrumAttribution(bandOnsets, sessionStartTime) {
+    const COINCIDENCE_WINDOW_MS = 15;
+    const SINGLE_BAND_MERGE_MS = 50;
+    const MERGE_WINDOW_MS = 30;
+    const bandNames = ['kick', 'bass', 'mid', 'snare', 'hihat'];
+
+    // Collect all band onsets into sorted list
+    var allOnsets = [];
+    for (var bi = 0; bi < bandNames.length; bi++) {
+      var bName = bandNames[bi];
+      var onsets = bandOnsets[bName] || [];
+      for (var oi = 0; oi < onsets.length; oi++) {
+        allOnsets.push({ time: onsets[oi].time - sessionStartTime, amplitude: onsets[oi].amplitude, band: bName });
+      }
+    }
+    allOnsets.sort(function(a, b) { return a.time - b.time; });
+    if (allOnsets.length === 0) return null;
+
+    // Group into coincident events
+    var events = [];
+    var currentEvent = { onsets: [allOnsets[0]], startTime: allOnsets[0].time };
+    for (var i = 1; i < allOnsets.length; i++) {
+      var o = allOnsets[i];
+      if (o.time - currentEvent.startTime <= COINCIDENCE_WINDOW_MS) {
+        var existing = currentEvent.onsets.find(function(e) { return e.band === o.band; });
+        if (!existing) { currentEvent.onsets.push(o); }
+        else if (o.amplitude > existing.amplitude) { existing.amplitude = o.amplitude; existing.time = o.time; }
+      } else {
+        events.push(currentEvent);
+        currentEvent = { onsets: [o], startTime: o.time };
+      }
+    }
+    events.push(currentEvent);
+
+    // Post-grouping merge: single-band events (speaker artifacts) + complementary profiles
+    var merged = true;
+    while (merged) {
+      merged = false;
+      for (var m = 0; m < events.length - 1; m++) {
+        var evA = events[m], evB = events[m + 1];
+        var gap = evB.startTime - evA.startTime;
+        if (gap > SINGLE_BAND_MERGE_MS) continue;
+
+        var singleBandMerge = (evA.onsets.length === 1 || evB.onsets.length === 1);
+        var subsetMerge = gap <= MERGE_WINDOW_MS && (evA.onsets.length <= 2 || evB.onsets.length <= 2);
+
+        if (singleBandMerge || subsetMerge) {
+          for (var bj = 0; bj < evB.onsets.length; bj++) {
+            var onset = evB.onsets[bj];
+            var ex = evA.onsets.find(function(e) { return e.band === onset.band; });
+            if (!ex) { evA.onsets.push(onset); }
+            else if (onset.amplitude > ex.amplitude) { ex.amplitude = onset.amplitude; ex.time = onset.time; }
+          }
+          events.splice(m + 1, 1);
+          merged = true;
+          break;
+        }
+      }
+    }
+
+    // Classify each event
+    var kickCount = 0, snareCount = 0, hihatAttrCount = 0;
+    for (var ei = 0; ei < events.length; ei++) {
+      var event = events[ei];
+      var profile = {};
+      var totalAmp = 0;
+      for (var bn = 0; bn < bandNames.length; bn++) profile[bandNames[bn]] = 0;
+      for (var pi = 0; pi < event.onsets.length; pi++) {
+        profile[event.onsets[pi].band] = event.onsets[pi].amplitude;
+        totalAmp += event.onsets[pi].amplitude;
+      }
+      if (totalAmp === 0) continue;
+
+      var kickRatio = profile.kick / totalAmp;
+      var snareRatio = profile.snare / totalAmp;
+      var hihatRatio = profile.hihat / totalAmp;
+      var upperRatio = (profile.snare + profile.hihat) / totalAmp;
+
+      if (kickRatio > 0.25 && kickRatio >= snareRatio && kickRatio >= hihatRatio) {
+        kickCount++;
+      } else if (upperRatio > kickRatio && hihatRatio >= snareRatio) {
+        hihatAttrCount++;
+      } else if (snareRatio > hihatRatio || (snareRatio + profile.mid / totalAmp) > (kickRatio + hihatRatio)) {
+        snareCount++;
+      } else {
+        // Fallback by dominant band
+        var maxBand = bandNames[0];
+        for (var di = 1; di < bandNames.length; di++) {
+          if (profile[bandNames[di]] > profile[maxBand]) maxBand = bandNames[di];
+        }
+        if (maxBand === 'kick') kickCount++;
+        else if (maxBand === 'hihat') hihatAttrCount++;
+        else snareCount++;
+      }
+    }
+
+    // Hybrid: use raw hi-hat band count (attribution undercounts due to simultaneous events)
+    var rawHihatCount = (bandOnsets.hihat || []).length;
+
+    return {
+      kick: kickCount,
+      snare: snareCount,
+      hihat: rawHihatCount,
+      hihatAttribution: hihatAttrCount,
+      totalEvents: events.length,
+      totalBandOnsets: allOnsets.length
+    };
+  }
+
   // ── Helpers ──
   function msPerBeat() { return 60000 / tempo; }
 
@@ -1054,6 +1167,17 @@ const App = (() => {
         sd.toFixed(1) + 'ms (' + matched.length + ' onsets)');
     }
 
+    // ── Drum attribution (v3 — hybrid approach) ──
+    // Groups simultaneous per-band onsets into single drum events, classifies by
+    // frequency profile. Uses attribution for kick/snare, raw band count for hi-hat.
+    const drumCounts = runDrumAttribution(bandOnsets, sessionStartTime);
+    if (drumCounts) {
+      console.log('[Groove] Drum attribution: kick=' + drumCounts.kick +
+        ', snare=' + drumCounts.snare + ', hihat=' + drumCounts.hihat +
+        ' (from ' + drumCounts.totalBandOnsets + ' band onsets → ' +
+        drumCounts.totalEvents + ' events)');
+    }
+
     // Tempo curve from anchor intervals (smoothed)
     let tempoCurve = AdaptiveGrid.getTempoFromAnchors(grid);
 
@@ -1101,6 +1225,7 @@ const App = (() => {
       density: weightedMetrics.density,
       densityLabel: weightedMetrics.densityLabel,
       bandAnalysis,
+      drumCounts,
       swingPercent: swingResult ? swingResult.swingPercent : null,
       swingLabel: swingResult ? swingResult.swingLabel : null
     });
@@ -1372,6 +1497,27 @@ const App = (() => {
       offset: o
     }));
     Visualizations.drawTimeline(document.getElementById('sc2'), onsetsForTimeline);
+
+    // Drum counts display
+    const drumSection = document.getElementById('drum-counts-section');
+    const drumRow = document.getElementById('drum-counts-row');
+    if (session.drumCounts && drumSection && drumRow) {
+      drumSection.style.display = 'block';
+      const dc = session.drumCounts;
+      const drums = [
+        { label: 'Kick', count: dc.kick, color: 'var(--coral, #fb7185)' },
+        { label: 'Snare', count: dc.snare, color: 'var(--amber, #fbbf24)' },
+        { label: 'Hi-hat', count: dc.hihat, color: 'var(--teal, #2dd4bf)' }
+      ];
+      drumRow.innerHTML = drums.map(function(d) {
+        return '<div class="drum-count-card">' +
+          '<div class="drum-count-label">' + d.label + '</div>' +
+          '<div class="drum-count-value" style="color:' + d.color + '">' + d.count + '</div>' +
+          '<div class="drum-count-sub">onsets</div></div>';
+      }).join('');
+    } else if (drumSection) {
+      drumSection.style.display = 'none';
+    }
 
     // Combined band analysis + timelines (paired rows)
     const bandSection = document.getElementById('band-analysis-section');

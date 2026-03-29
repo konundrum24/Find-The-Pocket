@@ -543,6 +543,50 @@ body {
 }
 
 /* ── Band Analysis ── */
+.drum-counts-section {
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 16px 12px;
+  border: 1px solid var(--border);
+  min-width: 0;
+}
+.drum-counts-section h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-tertiary);
+  margin-bottom: 12px;
+}
+.drum-counts-row {
+  display: flex;
+  gap: 10px;
+}
+.drum-count-card {
+  flex: 1;
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 12px 10px;
+  border: 1px solid var(--border);
+  text-align: center;
+}
+.drum-count-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+.drum-count-value {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.drum-count-sub {
+  font-size: 9px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
 .band-rows-section {
   background: var(--surface);
   border-radius: 16px;

@@ -346,13 +346,13 @@ const Visualizations = (() => {
     }
   }
 
-  // Band-specific colors for per-band timelines
+  // Band-specific colors for per-band timelines (v2 band names)
   const BAND_COLORS = {
-    subLow: { dot: 'rgba(29, 158, 117, 0.6)',  trend: 'rgba(29, 158, 117, 0.75)',  label: '#1D9E75' },  // teal
-    low:    { dot: 'rgba(64, 180, 150, 0.6)',   trend: 'rgba(64, 180, 150, 0.75)',  label: '#40B496' },  // light teal
-    lowMid: { dot: 'rgba(139, 127, 212, 0.6)', trend: 'rgba(139, 127, 212, 0.75)', label: '#8B7FD4' },  // purple
-    mid:    { dot: 'rgba(186, 117, 23, 0.6)',   trend: 'rgba(186, 117, 23, 0.75)',  label: '#BA7517' },  // amber
-    high:   { dot: 'rgba(216, 90, 48, 0.6)',    trend: 'rgba(216, 90, 48, 0.75)',   label: '#D85A30' }   // coral
+    kick:   { dot: 'rgba(251, 113, 133, 0.6)', trend: 'rgba(251, 113, 133, 0.75)', label: '#fb7185' },  // coral
+    bass:   { dot: 'rgba(64, 180, 150, 0.6)',  trend: 'rgba(64, 180, 150, 0.75)',  label: '#40B496' },  // light teal
+    mid:    { dot: 'rgba(139, 127, 212, 0.6)', trend: 'rgba(139, 127, 212, 0.75)', label: '#8B7FD4' },  // purple
+    snare:  { dot: 'rgba(251, 191, 36, 0.6)',  trend: 'rgba(251, 191, 36, 0.75)',  label: '#fbbf24' },  // amber
+    hihat:  { dot: 'rgba(45, 212, 191, 0.6)',  trend: 'rgba(45, 212, 191, 0.75)',  label: '#2dd4bf' }   // teal
   };
 
   /**
