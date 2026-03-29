@@ -92,9 +92,38 @@ The v2 rules compare frequency regions against each other rather than checking f
 3. **Post-grouping merge is essential** for any playback system with group delay (most real speakers)
 4. **The Sonos profile is closer to reality** than laptop speakers — if this works on Sonos, it will work on real instruments recorded close-mic'd
 
-## Next Steps
+## V3 Re-test Results (2026-03-29, sensitivity 15)
 
-- Re-run these three isolated instrument tests with the new algorithm
-- Test with different coincidence window values (10, 15, 20, 25ms)
-- Test on Chicken Grease (full mix) through Sonos
-- Compare accuracy between laptop speakers and Sonos
+After implementing v3 rules (kick-only lowRatio, 50ms single-band merge):
+
+### Accuracy Comparison Across Algorithm Versions
+
+| Test | v1 (8ms, old rules) | v2 (15ms, kick+bass low) | v3 (15ms, kick-only low) |
+|---|---|---|---|
+| **Kick** | 66% (31/47) | **100%** (32/32) | 70.4% (19/27) |
+| **Hi-hat** | 53% (99/188) | 65.2% (43/66) | **72.5%** (58/80) |
+| **Snare** | 41% (22/54) | 21.7% (10/46) | **67.6%** (25/37) |
+
+### v3 Kick Only (20 expected, 35.5s)
+- 27 events detected (+35% overcount)
+- 19/27 classified as kick (70.4%)
+- 8 misclassified: 7 snare, 1 hi-hat
+- Misclassified events are bass-dominant splits (Sonos port resonance) and mid-only artifacts
+
+### v3 Hi-hat Only (80 expected, 26.9s)
+- 80 events detected (0% count error — perfect)
+- 58/80 classified as hi-hat (72.5%)
+- 22 misclassified: 13 kick, 9 snare
+- Misclassified events are low-amplitude single/dual-band artifacts from speaker resonance
+
+### v3 Snare Only (30 expected, 35.3s)
+- 37 events detected (+23% overcount)
+- 25/37 classified as snare (67.6%)
+- 12 misclassified as kick (all with kickRatio > 25% — genuine sub-150Hz energy from snare body through Sonos)
+
+### Key Insight: Kick vs Snare Tradeoff
+v3 improved snare and hi-hat dramatically but regressed kick accuracy. The core tension:
+- Bass (150-400Hz) is produced by ALL instruments through full-range speakers
+- Including it in "low" ratio → kick accuracy up, snare/hi-hat down (v2)
+- Excluding it → snare/hi-hat up, kick down (v3)
+- v3 is the better tradeoff since kick accuracy recovers well in full mixes (see Experiment 5)
