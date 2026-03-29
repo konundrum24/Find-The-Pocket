@@ -302,6 +302,16 @@
     </div>
   </div>
 
+  <!-- Drum Attribution -->
+  <div class="section perf-panel" id="drum-attr-panel" style="display:none;">
+    <h2>Drum Attribution — Coincidence-Based Classification</h2>
+    <p style="font-size:11px;color:var(--text-tertiary);margin-bottom:10px;">
+      Groups simultaneous per-band onsets into single drum events, then classifies each event
+      based on its frequency profile. Eliminates multi-band double-counting.
+    </p>
+    <div id="drum-attr-results"></div>
+  </div>
+
   <!-- Performance metrics -->
   <div class="section perf-panel">
     <h2>Performance Metrics</h2>
@@ -1501,6 +1511,258 @@ function renderHPSSPanel() {
 }
 
 // ============================================
+// Drum Attribution — Coincidence-Based Classification
+// ============================================
+function runDrumAttribution() {
+  // Use HPSS band onsets if available, otherwise raw FFT 1024/Buf 512 band onsets
+  let bandData;
+  if (hpssResult && hpssResult.bandOnsetsV2) {
+    bandData = hpssResult.bandOnsetsV2;
+  } else if (allResults.length > 4 && allResults[4].bandOnsetsV2) {
+    bandData = allResults[4].bandOnsetsV2;
+  } else {
+    return null;
+  }
+
+  const COINCIDENCE_WINDOW_MS = 8; // onsets within ±8ms = same physical event
+  const bandNames = ['v2_kick', 'v2_bass', 'v2_mud', 'v2_snare', 'v2_hihat'];
+  const bandLabels = { v2_kick: 'Kick', v2_bass: 'Bass', v2_mud: 'Mid', v2_snare: 'Snare Crack', v2_hihat: 'Hi-hat' };
+
+  // Collect all band onsets into a single sorted list with band tags
+  const allOnsets = [];
+  for (const bName of bandNames) {
+    const onsets = bandData[bName] || [];
+    for (const o of onsets) {
+      allOnsets.push({ time: o.time, amplitude: o.amplitude, band: bName });
+    }
+  }
+  allOnsets.sort(function(a, b) { return a.time - b.time; });
+
+  if (allOnsets.length === 0) return null;
+
+  // Group into coincident events
+  const events = [];
+  let currentEvent = { onsets: [allOnsets[0]], startTime: allOnsets[0].time };
+
+  for (let i = 1; i < allOnsets.length; i++) {
+    const o = allOnsets[i];
+    // Check if this onset is within the window of the current event's start
+    if (o.time - currentEvent.startTime <= COINCIDENCE_WINDOW_MS) {
+      // Check we don't already have an onset from this band in this event
+      const existingBand = currentEvent.onsets.find(function(e) { return e.band === o.band; });
+      if (!existingBand) {
+        currentEvent.onsets.push(o);
+      }
+      // If band already exists, keep the louder one
+      else if (o.amplitude > existingBand.amplitude) {
+        existingBand.amplitude = o.amplitude;
+        existingBand.time = o.time;
+      }
+    } else {
+      events.push(currentEvent);
+      currentEvent = { onsets: [o], startTime: o.time };
+    }
+  }
+  events.push(currentEvent);
+
+  // Classify each event based on its frequency profile
+  const classified = { kick: [], snare: [], hihat: [], other: [] };
+
+  for (const event of events) {
+    // Build amplitude profile
+    const profile = {};
+    let totalAmp = 0;
+    for (const bName of bandNames) {
+      profile[bName] = 0;
+    }
+    for (const o of event.onsets) {
+      profile[o.band] = o.amplitude;
+      totalAmp += o.amplitude;
+    }
+    if (totalAmp === 0) continue;
+
+    // Compute ratios
+    const kickRatio = profile.v2_kick / totalAmp;
+    const bassRatio = profile.v2_bass / totalAmp;
+    const midRatio = profile.v2_mud / totalAmp;
+    const snareRatio = profile.v2_snare / totalAmp;
+    const hihatRatio = profile.v2_hihat / totalAmp;
+    const lowRatio = (profile.v2_kick + profile.v2_bass) / totalAmp;
+    const highRatio = profile.v2_hihat / totalAmp;
+    const bandsActive = event.onsets.length;
+
+    // Compute event time (amplitude-weighted average)
+    let weightedTime = 0, weightSum = 0;
+    for (const o of event.onsets) {
+      weightedTime += o.time * o.amplitude;
+      weightSum += o.amplitude;
+    }
+    const eventTime = weightedTime / weightSum;
+    const eventAmp = totalAmp;
+
+    const drumEvent = {
+      time: eventTime,
+      amplitude: eventAmp,
+      bandsActive: bandsActive,
+      profile: profile,
+      kickRatio: kickRatio,
+      snareRatio: snareRatio,
+      hihatRatio: hihatRatio,
+      lowRatio: lowRatio,
+      highRatio: highRatio
+    };
+
+    // Classification rules
+    // Kick: low-end dominant
+    if (kickRatio > 0.35 && highRatio < 0.15) {
+      drumEvent.type = 'kick';
+      classified.kick.push(drumEvent);
+    }
+    // Hi-hat: high-end dominant, minimal low end
+    else if (highRatio > 0.25 && kickRatio < 0.1 && bandsActive <= 4) {
+      drumEvent.type = 'hihat';
+      classified.hihat.push(drumEvent);
+    }
+    // Snare: broadband, strong mid presence
+    else if (bandsActive >= 3 && snareRatio > 0.15 && (midRatio + snareRatio) > 0.3) {
+      drumEvent.type = 'snare';
+      classified.snare.push(drumEvent);
+    }
+    // Fallback
+    else {
+      // Secondary classification by dominant band
+      const maxBand = bandNames.reduce(function(a, b) { return profile[a] > profile[b] ? a : b; });
+      if (maxBand === 'v2_kick' || maxBand === 'v2_bass') {
+        drumEvent.type = 'kick';
+        classified.kick.push(drumEvent);
+      } else if (maxBand === 'v2_hihat') {
+        drumEvent.type = 'hihat';
+        classified.hihat.push(drumEvent);
+      } else {
+        drumEvent.type = 'snare';
+        classified.snare.push(drumEvent);
+      }
+    }
+  }
+
+  return {
+    totalEvents: events.length,
+    totalBandOnsets: allOnsets.length,
+    deduplicationRatio: (allOnsets.length / events.length).toFixed(1),
+    classified: classified,
+    events: events
+  };
+}
+
+function renderDrumAttrPanel() {
+  const panel = document.getElementById('drum-attr-panel');
+  const attrResult = runDrumAttribution();
+  if (!attrResult) { panel.style.display = 'none'; return; }
+
+  panel.style.display = '';
+
+  let html = '';
+
+  // Summary table
+  html += '<table class="comparison-table"><thead><tr>' +
+    '<th>Metric</th><th>Value</th></tr></thead><tbody>';
+  html += '<tr><td>Total band onsets (before grouping)</td><td>' + attrResult.totalBandOnsets + '</td></tr>';
+  html += '<tr><td>Physical drum events (after grouping)</td><td style="color:var(--teal);font-weight:700">' + attrResult.totalEvents + '</td></tr>';
+  html += '<tr><td>Deduplication ratio</td><td>' + attrResult.deduplicationRatio + 'x</td></tr>';
+  html += '</tbody></table>';
+
+  // Classification results
+  html += '<h3 style="margin-top:16px;">Classification</h3>';
+  html += '<table class="comparison-table"><thead><tr>' +
+    '<th>Drum Type</th><th>Count</th><th>Avg Bands Active</th><th>Avg Kick Ratio</th>' +
+    '<th>Avg Snare Ratio</th><th>Avg HiHat Ratio</th></tr></thead><tbody>';
+
+  var types = [
+    { key: 'kick', label: 'Kick', color: 'var(--coral)' },
+    { key: 'snare', label: 'Snare', color: 'var(--amber)' },
+    { key: 'hihat', label: 'Hi-hat', color: 'var(--teal)' }
+  ];
+
+  for (const t of types) {
+    const events = attrResult.classified[t.key];
+    if (events.length === 0) {
+      html += '<tr><td style="color:' + t.color + '">' + t.label + '</td><td>0</td>' +
+        '<td>—</td><td>—</td><td>—</td><td>—</td></tr>';
+      continue;
+    }
+    const avgBands = (events.reduce(function(s, e) { return s + e.bandsActive; }, 0) / events.length).toFixed(1);
+    const avgKick = (events.reduce(function(s, e) { return s + e.kickRatio; }, 0) / events.length * 100).toFixed(0);
+    const avgSnare = (events.reduce(function(s, e) { return s + e.snareRatio; }, 0) / events.length * 100).toFixed(0);
+    const avgHihat = (events.reduce(function(s, e) { return s + e.hihatRatio; }, 0) / events.length * 100).toFixed(0);
+
+    html += '<tr><td style="color:' + t.color + ';font-weight:700">' + t.label + '</td>' +
+      '<td style="font-weight:700;font-size:16px">' + events.length + '</td>' +
+      '<td>' + avgBands + '</td>' +
+      '<td>' + avgKick + '%</td>' +
+      '<td>' + avgSnare + '%</td>' +
+      '<td>' + avgHihat + '%</td></tr>';
+  }
+
+  html += '</tbody></table>';
+
+  // Amplitude distribution per type
+  html += '<h3 style="margin-top:16px;">Amplitude by Drum Type</h3>';
+  html += '<table class="comparison-table"><thead><tr>' +
+    '<th>Type</th><th>Count</th><th>Max Amp</th><th>Median Amp</th><th>Min Amp</th></tr></thead><tbody>';
+
+  for (const t of types) {
+    const events = attrResult.classified[t.key];
+    if (events.length === 0) {
+      html += '<tr><td style="color:' + t.color + '">' + t.label + '</td><td>0</td>' +
+        '<td>—</td><td>—</td><td>—</td></tr>';
+      continue;
+    }
+    const amps = events.map(function(e) { return e.amplitude; }).sort(function(a, b) { return b - a; });
+    html += '<tr><td style="color:' + t.color + '">' + t.label + '</td>' +
+      '<td>' + events.length + '</td>' +
+      '<td>' + amps[0].toExponential(2) + '</td>' +
+      '<td>' + amps[Math.floor(amps.length / 2)].toExponential(2) + '</td>' +
+      '<td>' + amps[amps.length - 1].toExponential(2) + '</td></tr>';
+  }
+  html += '</tbody></table>';
+
+  // Compare with raw band counts
+  html += '<h3 style="margin-top:16px;">Before vs After Attribution</h3>';
+  html += '<p style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;">' +
+    'Shows how coincidence grouping + classification compares to raw per-band counting.</p>';
+
+  // Get raw counts from HPSS or FFT 1024/512
+  let rawCounts = {};
+  if (hpssResult && hpssResult.bandOnsetsV2) {
+    for (const bName in hpssResult.bandOnsetsV2) {
+      rawCounts[bName] = hpssResult.bandOnsetsV2[bName].length;
+    }
+  }
+
+  html += '<table class="comparison-table"><thead><tr>' +
+    '<th>Drum</th><th>Raw Band Count</th><th>Attributed Count</th><th>Reduction</th></tr></thead><tbody>';
+
+  html += '<tr><td style="color:var(--coral)">Kick</td>' +
+    '<td>' + (rawCounts.v2_kick || 0) + ' (40-150Hz band)</td>' +
+    '<td style="font-weight:700">' + attrResult.classified.kick.length + '</td>' +
+    '<td>' + (rawCounts.v2_kick ? ((1 - attrResult.classified.kick.length / rawCounts.v2_kick) * 100).toFixed(0) : '—') + '%</td></tr>';
+
+  html += '<tr><td style="color:var(--amber)">Snare</td>' +
+    '<td>' + (rawCounts.v2_snare || 0) + ' (2-5kHz band)</td>' +
+    '<td style="font-weight:700">' + attrResult.classified.snare.length + '</td>' +
+    '<td>' + (rawCounts.v2_snare ? ((1 - attrResult.classified.snare.length / rawCounts.v2_snare) * 100).toFixed(0) : '—') + '%</td></tr>';
+
+  html += '<tr><td style="color:var(--teal)">Hi-hat</td>' +
+    '<td>' + (rawCounts.v2_hihat || 0) + ' (6-16kHz band)</td>' +
+    '<td style="font-weight:700">' + attrResult.classified.hihat.length + '</td>' +
+    '<td>' + (rawCounts.v2_hihat ? ((1 - attrResult.classified.hihat.length / rawCounts.v2_hihat) * 100).toFixed(0) : '—') + '%</td></tr>';
+
+  html += '</tbody></table>';
+
+  document.getElementById('drum-attr-results').innerHTML = html;
+}
+
+// ============================================
 // Render All Results
 // ============================================
 function renderAllResults() {
@@ -1511,6 +1773,7 @@ function renderAllResults() {
   renderBandTable();
   renderBandTableV2();
   renderHPSSPanel();
+  renderDrumAttrPanel();
   renderPerfTable();
   renderFluxOverlay();
   renderEssentiaPanel();
