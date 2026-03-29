@@ -213,6 +213,26 @@
     </span>
   </div>
   <div class="gt-info" id="gt-info">Tap beats during recording, or enter BPM to generate evenly-spaced ground truth after recording.</div>
+  <div class="gt-row" style="margin-top:10px;">
+    <span class="sensitivity-control">
+      <label>Source instrument:</label>
+      <select id="source-instrument" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;">
+        <option value="">Unknown (full mix)</option>
+        <option value="hihat">Hi-hat only</option>
+        <option value="snare">Snare only</option>
+        <option value="kick">Kick only</option>
+      </select>
+    </span>
+    <span class="sensitivity-control">
+      <label>Expected count:</label>
+      <input type="number" id="expected-count" placeholder="e.g. 32" min="1" max="9999" style="width:90px;">
+    </span>
+    <span class="sensitivity-control">
+      <label>Coincidence window (ms):</label>
+      <input type="range" id="coincidence-window" min="5" max="40" value="15" oninput="document.getElementById('cw-val').textContent=this.value;if(document.getElementById('results').classList.contains('visible'))renderDrumAttrPanel();">
+      <span id="cw-val">15</span>
+    </span>
+  </div>
 </div>
 
 <!-- Progress -->
@@ -1524,7 +1544,7 @@ function runDrumAttribution() {
     return null;
   }
 
-  const COINCIDENCE_WINDOW_MS = 8; // onsets within ±8ms = same physical event
+  const COINCIDENCE_WINDOW_MS = parseInt(document.getElementById('coincidence-window').value) || 15;
   const bandNames = ['v2_kick', 'v2_bass', 'v2_mud', 'v2_snare', 'v2_hihat'];
   const bandLabels = { v2_kick: 'Kick', v2_bass: 'Bass', v2_mud: 'Mid', v2_snare: 'Snare Crack', v2_hihat: 'Hi-hat' };
 
@@ -1541,20 +1561,16 @@ function runDrumAttribution() {
   if (allOnsets.length === 0) return null;
 
   // Group into coincident events
-  const events = [];
-  let currentEvent = { onsets: [allOnsets[0]], startTime: allOnsets[0].time };
+  var events = [];
+  var currentEvent = { onsets: [allOnsets[0]], startTime: allOnsets[0].time };
 
-  for (let i = 1; i < allOnsets.length; i++) {
-    const o = allOnsets[i];
-    // Check if this onset is within the window of the current event's start
+  for (var i = 1; i < allOnsets.length; i++) {
+    var o = allOnsets[i];
     if (o.time - currentEvent.startTime <= COINCIDENCE_WINDOW_MS) {
-      // Check we don't already have an onset from this band in this event
-      const existingBand = currentEvent.onsets.find(function(e) { return e.band === o.band; });
+      var existingBand = currentEvent.onsets.find(function(e) { return e.band === o.band; });
       if (!existingBand) {
         currentEvent.onsets.push(o);
-      }
-      // If band already exists, keep the louder one
-      else if (o.amplitude > existingBand.amplitude) {
+      } else if (o.amplitude > existingBand.amplitude) {
         existingBand.amplitude = o.amplitude;
         existingBand.time = o.time;
       }
@@ -1565,82 +1581,174 @@ function runDrumAttribution() {
   }
   events.push(currentEvent);
 
-  // Classify each event based on its frequency profile
-  const classified = { kick: [], snare: [], hihat: [], other: [] };
+  // ── Post-grouping merge ──
+  // Full-range speakers (Sonos, studio monitors) have group delay: bass arrives
+  // later than treble. This creates split events where high-freq and low-freq
+  // components of the same hit fall outside the coincidence window.
+  //
+  // Two merge strategies:
+  // 1. Single-band events (speaker resonance artifacts) merge within 50ms
+  // 2. Complementary events (one low, one high) merge within 2x window
+  var MERGE_WINDOW_MS = Math.max(COINCIDENCE_WINDOW_MS * 2, 30);
+  var SINGLE_BAND_MERGE_MS = 50; // speaker group delay can be 30-50ms
+  var merged = true;
+  while (merged) {
+    merged = false;
+    for (var m = 0; m < events.length - 1; m++) {
+      var evA = events[m];
+      var evB = events[m + 1];
+      var gap = evB.startTime - evA.startTime;
 
-  for (const event of events) {
-    // Build amplitude profile
-    const profile = {};
-    let totalAmp = 0;
-    for (const bName of bandNames) {
-      profile[bName] = 0;
+      // Skip if beyond the maximum possible merge distance
+      if (gap > SINGLE_BAND_MERGE_MS) continue;
+
+      // Check if events are complementary (one low-freq, one high-freq)
+      var aBands = {};
+      var bBands = {};
+      for (var ai = 0; ai < evA.onsets.length; ai++) aBands[evA.onsets[ai].band] = true;
+      for (var bi = 0; bi < evB.onsets.length; bi++) bBands[evB.onsets[bi].band] = true;
+
+      var aHasLow = aBands['v2_kick'] || aBands['v2_bass'];
+      var aHasHigh = aBands['v2_snare'] || aBands['v2_hihat'];
+      var bHasLow = bBands['v2_kick'] || bBands['v2_bass'];
+      var bHasHigh = bBands['v2_snare'] || bBands['v2_hihat'];
+
+      // Strategy 1: Single-band events are almost always speaker resonance artifacts.
+      // A lone v2_kick or v2_bass onset appearing near a multi-band event = delayed
+      // bass from the same physical hit. Merge aggressively (within 50ms).
+      var singleBandMerge = (evA.onsets.length === 1 || evB.onsets.length === 1);
+
+      // Strategy 2: Complementary frequency profiles (within 2x window)
+      var complementary = gap <= MERGE_WINDOW_MS &&
+        ((aHasLow && !aHasHigh && bHasHigh && !bHasLow) ||
+         (aHasHigh && !aHasLow && bHasLow && !bHasHigh));
+
+      // Strategy 3: Small subset (1-2 bands) near a richer event (within 2x window)
+      var subsetMerge = gap <= MERGE_WINDOW_MS &&
+        (evA.onsets.length <= 2 || evB.onsets.length <= 2);
+
+      if (singleBandMerge || complementary || subsetMerge) {
+        // Merge B into A
+        for (var bj = 0; bj < evB.onsets.length; bj++) {
+          var onset = evB.onsets[bj];
+          var existing = evA.onsets.find(function(e) { return e.band === onset.band; });
+          if (!existing) {
+            evA.onsets.push(onset);
+          } else if (onset.amplitude > existing.amplitude) {
+            existing.amplitude = onset.amplitude;
+            existing.time = onset.time;
+          }
+        }
+        events.splice(m + 1, 1);
+        merged = true;
+        break;
+      }
     }
-    for (const o of event.onsets) {
-      profile[o.band] = o.amplitude;
-      totalAmp += o.amplitude;
+  }
+
+  // Classify each event based on its frequency profile
+  var classified = { kick: [], snare: [], hihat: [], other: [] };
+
+  for (var ei = 0; ei < events.length; ei++) {
+    var event = events[ei];
+    // Build amplitude profile
+    var profile = {};
+    var totalAmp = 0;
+    for (var bn = 0; bn < bandNames.length; bn++) {
+      profile[bandNames[bn]] = 0;
+    }
+    for (var oi = 0; oi < event.onsets.length; oi++) {
+      profile[event.onsets[oi].band] = event.onsets[oi].amplitude;
+      totalAmp += event.onsets[oi].amplitude;
     }
     if (totalAmp === 0) continue;
 
     // Compute ratios
-    const kickRatio = profile.v2_kick / totalAmp;
-    const bassRatio = profile.v2_bass / totalAmp;
-    const midRatio = profile.v2_mud / totalAmp;
-    const snareRatio = profile.v2_snare / totalAmp;
-    const hihatRatio = profile.v2_hihat / totalAmp;
-    const lowRatio = (profile.v2_kick + profile.v2_bass) / totalAmp;
-    const highRatio = profile.v2_hihat / totalAmp;
-    const bandsActive = event.onsets.length;
+    // IMPORTANT: bass (150-400Hz) is NOT diagnostic of kick drum — full-range speakers
+    // produce significant 150-400Hz energy from ALL instruments (port resonance).
+    // Only v2_kick (40-150Hz) is truly kick-specific.
+    var kickRatio = profile.v2_kick / totalAmp;
+    var bassRatio = profile.v2_bass / totalAmp;
+    var midRatio = profile.v2_mud / totalAmp;
+    var snareRatio = profile.v2_snare / totalAmp;
+    var hihatRatio = profile.v2_hihat / totalAmp;
+    var lowRatio = profile.v2_kick / totalAmp; // kick band ONLY (not bass)
+    var highRatio = profile.v2_hihat / totalAmp;
+    var upperRatio = (profile.v2_snare + profile.v2_hihat) / totalAmp;
+    var bandsActive = event.onsets.length;
 
     // Compute event time (amplitude-weighted average)
-    let weightedTime = 0, weightSum = 0;
-    for (const o of event.onsets) {
-      weightedTime += o.time * o.amplitude;
-      weightSum += o.amplitude;
+    var weightedTime = 0, weightSum = 0;
+    for (var wi = 0; wi < event.onsets.length; wi++) {
+      weightedTime += event.onsets[wi].time * event.onsets[wi].amplitude;
+      weightSum += event.onsets[wi].amplitude;
     }
-    const eventTime = weightedTime / weightSum;
-    const eventAmp = totalAmp;
+    var eventTime = weightedTime / weightSum;
 
-    const drumEvent = {
+    var drumEvent = {
       time: eventTime,
-      amplitude: eventAmp,
+      amplitude: totalAmp,
       bandsActive: bandsActive,
       profile: profile,
       kickRatio: kickRatio,
+      bassRatio: bassRatio,
+      midRatio: midRatio,
       snareRatio: snareRatio,
       hihatRatio: hihatRatio,
       lowRatio: lowRatio,
-      highRatio: highRatio
+      highRatio: highRatio,
+      upperRatio: upperRatio
     };
 
-    // Classification rules
-    // Kick: low-end dominant
-    if (kickRatio > 0.35 && highRatio < 0.15) {
+    // ── Classification rules (v3 — speaker-agnostic) ──
+    // Key insight: bass (150-400Hz) is produced by ALL instruments through
+    // full-range speakers. Only the kick band (40-150Hz) is diagnostic.
+    // Classification uses kickRatio (40-150Hz only) as the "low" indicator.
+
+    // Find the dominant individual band
+    var maxBand = bandNames[0];
+    for (var dbi = 1; dbi < bandNames.length; dbi++) {
+      if (profile[bandNames[dbi]] > profile[maxBand]) maxBand = bandNames[dbi];
+    }
+
+    // Kick: 40-150Hz band is dominant and significant
+    // Real kick drums have massive sub-150Hz energy that exceeds all other bands
+    if (kickRatio > 0.25 && kickRatio >= snareRatio && kickRatio >= hihatRatio) {
       drumEvent.type = 'kick';
       classified.kick.push(drumEvent);
     }
-    // Hi-hat: high-end dominant, minimal low end
-    else if (highRatio > 0.25 && kickRatio < 0.1 && bandsActive <= 4) {
+    // Hi-hat: upper bands (snare crack + hi-hat) dominate, with hi-hat >= snare
+    // Hi-hat has strong 6-16kHz and 2-5kHz (stick impact), weak sub-150Hz
+    else if (upperRatio > kickRatio && hihatRatio >= snareRatio) {
       drumEvent.type = 'hihat';
       classified.hihat.push(drumEvent);
     }
-    // Snare: broadband, strong mid presence
-    else if (bandsActive >= 3 && snareRatio > 0.15 && (midRatio + snareRatio) > 0.3) {
+    // Snare: broadband with strong snare crack, weak sub-150Hz
+    // Snare has energy everywhere but the snare crack (2-5kHz) stands out
+    else if (snareRatio > hihatRatio || (snareRatio + midRatio) > (kickRatio + hihatRatio)) {
       drumEvent.type = 'snare';
       classified.snare.push(drumEvent);
     }
-    // Fallback
+    // Fallback: classify by dominant band (ignoring bass — it's ambiguous)
     else {
-      // Secondary classification by dominant band
-      const maxBand = bandNames.reduce(function(a, b) { return profile[a] > profile[b] ? a : b; });
-      if (maxBand === 'v2_kick' || maxBand === 'v2_bass') {
+      if (maxBand === 'v2_kick') {
         drumEvent.type = 'kick';
         classified.kick.push(drumEvent);
       } else if (maxBand === 'v2_hihat') {
         drumEvent.type = 'hihat';
         classified.hihat.push(drumEvent);
-      } else {
+      } else if (maxBand === 'v2_snare' || maxBand === 'v2_mud') {
         drumEvent.type = 'snare';
         classified.snare.push(drumEvent);
+      } else {
+        // v2_bass dominant — ambiguous, use secondary signal
+        if (upperRatio > kickRatio) {
+          drumEvent.type = 'snare';
+          classified.snare.push(drumEvent);
+        } else {
+          drumEvent.type = 'kick';
+          classified.kick.push(drumEvent);
+        }
       }
     }
   }
@@ -1650,7 +1758,10 @@ function runDrumAttribution() {
     totalBandOnsets: allOnsets.length,
     deduplicationRatio: (allOnsets.length / events.length).toFixed(1),
     classified: classified,
-    events: events
+    events: events,
+    coincidenceWindowMs: COINCIDENCE_WINDOW_MS,
+    mergeWindowMs: MERGE_WINDOW_MS,
+    singleBandMergeMs: SINGLE_BAND_MERGE_MS
   };
 }
 
@@ -1661,17 +1772,64 @@ function renderDrumAttrPanel() {
 
   panel.style.display = '';
 
+  const sourceInstrument = document.getElementById('source-instrument').value;
+  const expectedCount = parseInt(document.getElementById('expected-count').value) || 0;
+
   let html = '';
 
-  // Summary table
+  // ── Validation scorecard (when source instrument is set) ──
+  if (sourceInstrument) {
+    const correctCount = attrResult.classified[sourceInstrument] ? attrResult.classified[sourceInstrument].length : 0;
+    const totalEvents = attrResult.totalEvents;
+    const accuracy = totalEvents > 0 ? (correctCount / totalEvents * 100) : 0;
+    const misclassified = totalEvents - correctCount;
+
+    // Per-type misclassification breakdown
+    const misBreakdown = [];
+    var dtypes = ['kick', 'snare', 'hihat'];
+    for (const dt of dtypes) {
+      if (dt !== sourceInstrument && attrResult.classified[dt].length > 0) {
+        misBreakdown.push(dt.charAt(0).toUpperCase() + dt.slice(1) + ': ' + attrResult.classified[dt].length);
+      }
+    }
+    if (attrResult.classified.other && attrResult.classified.other.length > 0) {
+      misBreakdown.push('Other: ' + attrResult.classified.other.length);
+    }
+
+    const accClass = accuracy >= 90 ? 'val-good' : accuracy >= 70 ? 'val-warn' : 'val-bad';
+    const instLabel = sourceInstrument === 'hihat' ? 'Hi-hat' : sourceInstrument.charAt(0).toUpperCase() + sourceInstrument.slice(1);
+
+    html += '<div style="background:var(--bg);border:2px solid ' +
+      (accuracy >= 90 ? 'var(--teal)' : accuracy >= 70 ? 'var(--amber)' : 'var(--coral)') +
+      ';border-radius:12px;padding:16px;margin-bottom:16px;">';
+    html += '<h3 style="margin-bottom:10px;color:var(--text);">Validation: ' + instLabel + ' Only</h3>';
+    html += '<table class="comparison-table"><thead><tr>' +
+      '<th>Metric</th><th>Value</th></tr></thead><tbody>';
+    html += '<tr><td>Total drum events detected</td><td style="font-weight:700">' + totalEvents + '</td></tr>';
+    if (expectedCount > 0) {
+      const countDiff = totalEvents - expectedCount;
+      const countAccClass = Math.abs(countDiff) <= 2 ? 'val-good' : Math.abs(countDiff) <= 5 ? 'val-warn' : 'val-bad';
+      html += '<tr><td>Expected count</td><td>' + expectedCount + '</td></tr>';
+      html += '<tr><td>Count error</td><td class="' + countAccClass + '" style="font-weight:700">' +
+        (countDiff >= 0 ? '+' : '') + countDiff + ' (' + (expectedCount > 0 ? (countDiff / expectedCount * 100).toFixed(1) : '0') + '%)</td></tr>';
+    }
+    html += '<tr><td>Correctly classified as ' + instLabel + '</td><td class="' + accClass + '" style="font-weight:700;font-size:16px">' +
+      correctCount + ' / ' + totalEvents + ' (' + accuracy.toFixed(1) + '%)</td></tr>';
+    html += '<tr><td>Misclassified</td><td' + (misclassified > 0 ? ' class="val-bad"' : '') + '>' +
+      misclassified + (misBreakdown.length > 0 ? ' — ' + misBreakdown.join(', ') : '') + '</td></tr>';
+    html += '</tbody></table></div>';
+  }
+
+  // ── Summary table ──
   html += '<table class="comparison-table"><thead><tr>' +
     '<th>Metric</th><th>Value</th></tr></thead><tbody>';
+  html += '<tr><td>Coincidence window</td><td>' + attrResult.coincidenceWindowMs + 'ms (merge: ' + attrResult.mergeWindowMs + 'ms, single-band: ' + attrResult.singleBandMergeMs + 'ms)</td></tr>';
   html += '<tr><td>Total band onsets (before grouping)</td><td>' + attrResult.totalBandOnsets + '</td></tr>';
-  html += '<tr><td>Physical drum events (after grouping)</td><td style="color:var(--teal);font-weight:700">' + attrResult.totalEvents + '</td></tr>';
+  html += '<tr><td>Physical drum events (after grouping + merge)</td><td style="color:var(--teal);font-weight:700">' + attrResult.totalEvents + '</td></tr>';
   html += '<tr><td>Deduplication ratio</td><td>' + attrResult.deduplicationRatio + 'x</td></tr>';
   html += '</tbody></table>';
 
-  // Classification results
+  // ── Classification results ──
   html += '<h3 style="margin-top:16px;">Classification</h3>';
   html += '<table class="comparison-table"><thead><tr>' +
     '<th>Drum Type</th><th>Count</th><th>Avg Bands Active</th><th>Avg Kick Ratio</th>' +
@@ -1705,7 +1863,7 @@ function renderDrumAttrPanel() {
 
   html += '</tbody></table>';
 
-  // Amplitude distribution per type
+  // ── Amplitude distribution per type ──
   html += '<h3 style="margin-top:16px;">Amplitude by Drum Type</h3>';
   html += '<table class="comparison-table"><thead><tr>' +
     '<th>Type</th><th>Count</th><th>Max Amp</th><th>Median Amp</th><th>Min Amp</th></tr></thead><tbody>';
@@ -1726,12 +1884,11 @@ function renderDrumAttrPanel() {
   }
   html += '</tbody></table>';
 
-  // Compare with raw band counts
+  // ── Before vs After Attribution ──
   html += '<h3 style="margin-top:16px;">Before vs After Attribution</h3>';
   html += '<p style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;">' +
     'Shows how coincidence grouping + classification compares to raw per-band counting.</p>';
 
-  // Get raw counts from HPSS or FFT 1024/512
   let rawCounts = {};
   if (hpssResult && hpssResult.bandOnsetsV2) {
     for (const bName in hpssResult.bandOnsetsV2) {
@@ -1759,7 +1916,135 @@ function renderDrumAttrPanel() {
 
   html += '</tbody></table>';
 
+  // ── Per-event detail table (collapsible) ──
+  const allEvents = [];
+  for (const t of types) {
+    for (const e of attrResult.classified[t.key]) {
+      allEvents.push(e);
+    }
+  }
+  if (attrResult.classified.other) {
+    for (const e of attrResult.classified.other) {
+      allEvents.push(e);
+    }
+  }
+  allEvents.sort(function(a, b) { return a.time - b.time; });
+
+  html += '<details style="margin-top:16px;"><summary>Per-Event Detail (' + allEvents.length + ' events)</summary>';
+  html += '<div style="max-height:400px;overflow-y:auto;margin-top:8px;">';
+  html += '<table class="comparison-table"><thead><tr>' +
+    '<th>#</th><th>Time</th><th>Type</th><th>Bands</th>' +
+    '<th>Kick%</th><th>Bass%</th><th>Mid%</th><th>Snare%</th><th>HiHat%</th>' +
+    '<th>Total Amp</th></tr></thead><tbody>';
+
+  const typeColors = { kick: 'var(--coral)', snare: 'var(--amber)', hihat: 'var(--teal)', other: 'var(--text-tertiary)' };
+
+  for (let i = 0; i < allEvents.length; i++) {
+    const e = allEvents[i];
+    const isWrong = sourceInstrument && e.type !== sourceInstrument;
+    const rowStyle = isWrong ? ' style="background:rgba(251,113,133,0.1);"' : '';
+    const totalAmp = e.amplitude;
+    const pKick = totalAmp > 0 ? (e.profile.v2_kick / totalAmp * 100).toFixed(0) : '0';
+    const pBass = totalAmp > 0 ? (e.profile.v2_bass / totalAmp * 100).toFixed(0) : '0';
+    const pMid = totalAmp > 0 ? (e.profile.v2_mud / totalAmp * 100).toFixed(0) : '0';
+    const pSnare = totalAmp > 0 ? (e.profile.v2_snare / totalAmp * 100).toFixed(0) : '0';
+    const pHihat = totalAmp > 0 ? (e.profile.v2_hihat / totalAmp * 100).toFixed(0) : '0';
+
+    html += '<tr' + rowStyle + '>' +
+      '<td>' + (i + 1) + '</td>' +
+      '<td>' + (e.time / 1000).toFixed(3) + 's</td>' +
+      '<td style="color:' + (typeColors[e.type] || 'var(--text)') + ';font-weight:700">' +
+        e.type + (isWrong ? ' ✗' : '') + '</td>' +
+      '<td>' + e.bandsActive + '</td>' +
+      '<td>' + pKick + '</td><td>' + pBass + '</td><td>' + pMid + '</td>' +
+      '<td>' + pSnare + '</td><td>' + pHihat + '</td>' +
+      '<td>' + totalAmp.toExponential(2) + '</td></tr>';
+  }
+  html += '</tbody></table></div></details>';
+
+  // ── Copy Results button ──
+  html += '<div style="margin-top:12px;"><button onclick="copyDrumAttrResults()" ' +
+    'style="padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;' +
+    'background:var(--purple);color:#fff;border:none;cursor:pointer;">Copy Results as Markdown</button>' +
+    '<span id="copy-attr-status" style="font-size:11px;color:var(--text-tertiary);margin-left:8px;"></span></div>';
+
   document.getElementById('drum-attr-results').innerHTML = html;
+}
+
+function copyDrumAttrResults() {
+  const attrResult = runDrumAttribution();
+  if (!attrResult) return;
+
+  const sourceInstrument = document.getElementById('source-instrument').value;
+  const expectedCount = parseInt(document.getElementById('expected-count').value) || 0;
+  const instLabel = sourceInstrument === 'hihat' ? 'Hi-hat' : sourceInstrument ? sourceInstrument.charAt(0).toUpperCase() + sourceInstrument.slice(1) : 'Unknown';
+
+  let md = '## Drum Attribution Results\n\n';
+
+  if (sourceInstrument) {
+    const correctCount = attrResult.classified[sourceInstrument] ? attrResult.classified[sourceInstrument].length : 0;
+    const accuracy = attrResult.totalEvents > 0 ? (correctCount / attrResult.totalEvents * 100).toFixed(1) : '0';
+    md += '**Source:** ' + instLabel + ' only\n';
+    if (expectedCount > 0) {
+      md += '**Expected count:** ' + expectedCount + '\n';
+    }
+    md += '**Classification accuracy:** ' + correctCount + '/' + attrResult.totalEvents + ' (' + accuracy + '%)\n\n';
+  }
+
+  md += '| Metric | Value |\n|---|---|\n';
+  md += '| Coincidence window | ' + attrResult.coincidenceWindowMs + 'ms (merge: ' + attrResult.mergeWindowMs + 'ms, 1-band: ' + attrResult.singleBandMergeMs + 'ms) |\n';
+  md += '| Total band onsets | ' + attrResult.totalBandOnsets + ' |\n';
+  md += '| Physical drum events | ' + attrResult.totalEvents + ' |\n';
+  md += '| Deduplication ratio | ' + attrResult.deduplicationRatio + 'x |\n\n';
+
+  md += '| Drum Type | Count | Avg Bands | Avg Kick% | Avg Snare% | Avg HiHat% |\n|---|---|---|---|---|---|\n';
+
+  var dtypes = [
+    { key: 'kick', label: 'Kick' },
+    { key: 'snare', label: 'Snare' },
+    { key: 'hihat', label: 'Hi-hat' }
+  ];
+
+  for (const t of dtypes) {
+    const events = attrResult.classified[t.key];
+    if (events.length === 0) {
+      md += '| ' + t.label + ' | 0 | — | — | — | — |\n';
+      continue;
+    }
+    const avgBands = (events.reduce(function(s, e) { return s + e.bandsActive; }, 0) / events.length).toFixed(1);
+    const avgKick = (events.reduce(function(s, e) { return s + e.kickRatio; }, 0) / events.length * 100).toFixed(0);
+    const avgSnare = (events.reduce(function(s, e) { return s + e.snareRatio; }, 0) / events.length * 100).toFixed(0);
+    const avgHihat = (events.reduce(function(s, e) { return s + e.hihatRatio; }, 0) / events.length * 100).toFixed(0);
+    md += '| ' + t.label + ' | ' + events.length + ' | ' + avgBands + ' | ' + avgKick + '% | ' + avgSnare + '% | ' + avgHihat + '% |\n';
+  }
+
+  // Misclassification detail for isolated instruments
+  if (sourceInstrument) {
+    const allEvents = [];
+    for (const t of dtypes) {
+      for (const e of attrResult.classified[t.key]) allEvents.push(e);
+    }
+    if (attrResult.classified.other) {
+      for (const e of attrResult.classified.other) allEvents.push(e);
+    }
+    const misclassified = allEvents.filter(function(e) { return e.type !== sourceInstrument; });
+    if (misclassified.length > 0) {
+      md += '\n### Misclassified Events (' + misclassified.length + ')\n\n';
+      md += '| # | Time | Classified As | Kick% | Snare% | HiHat% | Bands |\n|---|---|---|---|---|---|---|\n';
+      misclassified.sort(function(a, b) { return a.time - b.time; });
+      for (let i = 0; i < misclassified.length; i++) {
+        const e = misclassified[i];
+        md += '| ' + (i + 1) + ' | ' + (e.time / 1000).toFixed(3) + 's | ' + e.type +
+          ' | ' + (e.kickRatio * 100).toFixed(0) + '% | ' + (e.snareRatio * 100).toFixed(0) +
+          '% | ' + (e.hihatRatio * 100).toFixed(0) + '% | ' + e.bandsActive + ' |\n';
+      }
+    }
+  }
+
+  navigator.clipboard.writeText(md).then(function() {
+    document.getElementById('copy-attr-status').textContent = 'Copied!';
+    setTimeout(function() { document.getElementById('copy-attr-status').textContent = ''; }, 2000);
+  });
 }
 
 // ============================================
