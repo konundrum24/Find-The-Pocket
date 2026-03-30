@@ -260,7 +260,7 @@ const PatternGrid = (() => {
         const anchorIdx = cycleStart + Math.floor(position);
         const fractionalBeat = position - Math.floor(position);
 
-        if (anchorIdx >= numAnchors - 1) break;
+        if (anchorIdx < 0 || anchorIdx >= numAnchors - 1) continue;
 
         const anchorA = anchors[anchorIdx];
         const anchorB = anchors[anchorIdx + 1];

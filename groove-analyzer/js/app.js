@@ -1054,6 +1054,7 @@ const App = (() => {
     const t0 = performance.now();
 
     let anchors = null;
+    let onsetPhaseShiftMs = null; // populated if onset-anchored phase correction fires
 
     // Try Essentia.js beat tracking first (adaptive grid, correct octave resolution)
     if (pcmData && pcmData.signal.length > 0) {
@@ -1067,6 +1068,17 @@ const App = (() => {
       anchors = extractEssentiaBeats(pcmData.signal, pcmData.sampleRate, timeOffsetMs);
       if (anchors) {
         console.log('[Groove] Using Essentia.js beat positions (' + anchors.length + ' anchors)');
+
+        // Onset-anchored phase correction: keep Essentia's tempo (intervals)
+        // but replace its arbitrary phase with one derived from detected onsets.
+        const phaseResult = PhaseAlignment.correctPhase(anchors, sessionOnsets);
+        anchors = phaseResult.anchors;
+        if (phaseResult.improved) {
+          onsetPhaseShiftMs = phaseResult.phaseShiftMs;
+          console.log('[Groove] Phase correction: ' +
+            (onsetPhaseShiftMs >= 0 ? '+' : '') +
+            onsetPhaseShiftMs.toFixed(1) + 'ms shift applied');
+        }
       }
       console.log('[Groove] ⏱ Essentia:', Math.round(performance.now() - t0) + 'ms');
     }
@@ -1112,9 +1124,9 @@ const App = (() => {
     console.log('[Groove] final displayed BPM:', Math.round(globalBpm));
     tempo = globalBpm;
 
-    // ── Match onsets to grid (no phase correction) ──
-    // Essentia places beats where they actually are in the audio.
-    // Phase correction would shift the grid away from ground truth.
+    // ── Match onsets to grid ──
+    // Anchors are already phase-corrected upstream (onset-anchored phase)
+    // when using Essentia in Free Play mode.
     const classifiedOnsets = AdaptiveGrid.matchToAdaptiveGrid(sessionOnsets, grid);
 
     if (classifiedOnsets.length < 6) {
@@ -1283,6 +1295,7 @@ const App = (() => {
 
     session._diagnostics = diagReport;
     session._gridUnitMs = grid.medianGridUnitMs;
+    session._phaseShiftMs = onsetPhaseShiftMs;
 
     return session;
   }
@@ -1651,7 +1664,7 @@ const App = (() => {
     if (session._diagnostics && diagSection && diagContent) {
       diagSection.style.display = '';
       diagContent.innerHTML = Diagnostics.renderPanel(
-        session._diagnostics, session._gridUnitMs, null
+        session._diagnostics, session._gridUnitMs, session._phaseShiftMs
       );
       // Draw phase sweep chart after DOM is ready
       requestAnimationFrame(() => {

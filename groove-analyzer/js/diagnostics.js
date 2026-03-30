@@ -272,8 +272,8 @@ const Diagnostics = (() => {
     // ── Phase Correction Banner ──
     if (wasApplied) {
       html += '<div class="diag-banner">';
-      html += '<strong>Phase correction applied:</strong> grid shifted by ' +
-        fmtMs(appliedCorrection) + ' using circular statistics. ';
+      html += '<strong>Onset-anchored phase correction:</strong> grid shifted by ' +
+        fmtMs(appliedCorrection) + ' to align with detected onsets. ';
       html += 'Results below reflect the corrected grid.';
       html += '</div>';
     }
