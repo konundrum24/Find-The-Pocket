@@ -1069,16 +1069,10 @@ const App = (() => {
       if (anchors) {
         console.log('[Groove] Using Essentia.js beat positions (' + anchors.length + ' anchors)');
 
-        // Onset-anchored phase correction: keep Essentia's tempo (intervals)
-        // but replace its arbitrary phase with one derived from detected onsets.
-        const phaseResult = PhaseAlignment.correctPhase(anchors, sessionOnsets);
-        anchors = phaseResult.anchors;
-        if (phaseResult.improved) {
-          onsetPhaseShiftMs = phaseResult.phaseShiftMs;
-          console.log('[Groove] Phase correction: ' +
-            (onsetPhaseShiftMs >= 0 ? '+' : '') +
-            onsetPhaseShiftMs.toFixed(1) + 'ms shift applied');
-        }
+        // Phase correction disabled — Essentia's grid is ground truth.
+        // The onset-anchored phase correction was pulling the grid toward
+        // center, erasing the laid-back feel on tracks like Chicken Grease.
+        // Essentia already places beats where they are in the audio.
       }
       console.log('[Groove] ⏱ Essentia:', Math.round(performance.now() - t0) + 'ms');
     }
