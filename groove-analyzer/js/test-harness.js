@@ -446,11 +446,13 @@ const TestHarness = (function () {
 
     let completedRuns = 0;
     updateProgress(0, totalRuns, 'Starting experiment...');
+    await new Promise(r => setTimeout(r, 50)); // yield for initial paint
 
     // Load and cache audio files
     const audioCache = {};
     for (const song of config.songs) {
       updateProgress(completedRuns, totalRuns, 'Loading ' + song.name + '...');
+      await new Promise(r => setTimeout(r, 10)); // yield for paint
 
       try {
         let pcm, sampleRate, duration;
@@ -575,6 +577,7 @@ const TestHarness = (function () {
               completedRuns++;
               updateProgress(completedRuns, totalRuns,
                 song.name + ' | ' + segment.label + ' | ' + engineParam.label + ' | Phase ' + phaseConfig + ' | Run ' + run);
+              await new Promise(r => setTimeout(r, 10)); // yield for progress paint
 
               try {
                 // Use cached Essentia result for run 1 / no jitter
@@ -705,6 +708,7 @@ const TestHarness = (function () {
     };
 
     lastOutput = output;
+    window.lastExperimentOutput = output;
     displayResults(output);
     return output;
   }
@@ -796,7 +800,7 @@ const TestHarness = (function () {
     const detailEl = document.getElementById('progress-detail');
     const etaEl = document.getElementById('progress-eta');
 
-    if (panel) panel.style.display = '';
+    if (panel) panel.style.display = 'block';
     if (bar) bar.style.width = (total > 0 ? Math.round((completed / total) * 100) : 0) + '%';
     if (text) text.textContent = completed + ' / ' + total;
     if (detailEl) detailEl.textContent = detail || '';
@@ -819,7 +823,7 @@ const TestHarness = (function () {
     const progressPanel = document.getElementById('progress-panel');
     const resultsPanel = document.getElementById('results-panel');
     if (progressPanel) progressPanel.style.display = 'none';
-    if (resultsPanel) resultsPanel.style.display = '';
+    if (resultsPanel) resultsPanel.style.display = 'block';
 
     const container = document.getElementById('summary-table-container');
     if (!container) return;
