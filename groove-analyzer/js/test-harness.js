@@ -33,7 +33,7 @@ const TestHarness = (function () {
       {
         label: 'default',
         fftHF: 1024, fftLF: 4096,
-        bufferHF: 512, bufferLF: 2048,
+        bufferHF: 512, bufferLF: 1024,
         sensitivity: 8
       },
     ],
