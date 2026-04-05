@@ -1119,6 +1119,7 @@ const App = (() => {
 
     let anchors = null;
     let onsetPhaseShiftMs = null; // populated if onset-anchored phase correction fires
+    let onsetStructuralCount = null; // populated by Config C: count of structural onsets used
 
     // Try Essentia.js beat tracking first (adaptive grid, correct octave resolution)
     if (pcmData && pcmData.signal.length > 0) {
@@ -1150,13 +1151,22 @@ const App = (() => {
           // Compute average beat interval from anchors
           const avgIntervalMs = (anchors[anchors.length - 1].time - anchors[0].time) / (anchors.length - 1);
           const beatIntervalMs = avgIntervalMs;
+          console.log('[Config C] Starting selective phase correction');
+          console.log('[Config C] Total onsets: ' + sessionOnsets.length +
+            ', beat interval: ' + beatIntervalMs.toFixed(1) + 'ms');
+
           const structuralOnsets = PhaseAlignment.selectStructuralOnsets(sessionOnsets, beatIntervalMs);
 
           if (structuralOnsets) {
+            console.log('[Config C] Selected ' + structuralOnsets.length +
+              ' structural onsets out of ' + sessionOnsets.length + ' total (' +
+              (structuralOnsets.length / sessionOnsets.length * 100).toFixed(1) + '%)');
+
             const phaseResult = PhaseAlignment.correctPhase(anchors, structuralOnsets);
             if (phaseResult.improved) {
               anchors = phaseResult.anchors;
               onsetPhaseShiftMs = phaseResult.phaseShiftMs;
+              onsetStructuralCount = structuralOnsets.length;
               console.log('[Config C] Selective phase correction applied: ' +
                 (phaseResult.phaseShiftMs >= 0 ? '+' : '') + phaseResult.phaseShiftMs.toFixed(1) + 'ms' +
                 ' (' + structuralOnsets.length + ' structural onsets of ' + sessionOnsets.length + ' total)');
@@ -1403,7 +1413,7 @@ const App = (() => {
         bandAnalysis,
         drumCounts,
         phaseOffsetMs: onsetPhaseShiftMs,
-        structuralOnsetCount: currentPhaseConfig === 'C' ? (onsetPhaseShiftMs != null ? sessionOnsets.length : null) : null,
+        structuralOnsetCount: onsetStructuralCount,
         totalOnsetCount: sessionOnsets.length,
         gridPhaseError: diagReport ? diagReport.phaseError : null,
         clusterStrength: diagReport ? diagReport.clusterStrength : null,

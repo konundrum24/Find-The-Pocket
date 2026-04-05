@@ -207,46 +207,56 @@ const PhaseAlignment = (function () {
    */
   function selectStructuralOnsets(onsets, beatIntervalMs, options) {
     options = options || {};
-    const periodicityTolerance = options.periodicityTolerance || 0.15;
-    const amplitudePercentile = options.amplitudePercentile || 0.60;
+    const periodicityTolerance = options.periodicityTolerance || 0.10;  // ±10% of beat interval
+    const amplitudePercentile = options.amplitudePercentile || 0.70;    // keep top 30% by amplitude
     const minStructuralOnsets = options.minStructuralOnsets || 8;
+    const minPeriodicPartners = options.minPeriodicPartners || 2;       // need 2+ partners to qualify
 
     if (onsets.length < minStructuralOnsets) return null;
 
-    // Step 1: Find the amplitude threshold (60th percentile)
+    // Step 1: Find the amplitude threshold
     const sortedAmps = onsets.map(o => o.amplitude).sort((a, b) => a - b);
     const ampThreshold = sortedAmps[Math.floor(sortedAmps.length * amplitudePercentile)];
 
     // Step 2: Filter to loud onsets
     const loudOnsets = onsets.filter(o => o.amplitude >= ampThreshold);
 
+    console.log('[PhaseAlign] Selective step 2: ' + loudOnsets.length +
+      ' loud onsets of ' + onsets.length + ' total (amp >= ' + ampThreshold.toFixed(4) + ')');
+
     // Step 3: Among loud onsets, find those with periodic partners.
-    // An onset is "periodic" if there's another loud onset approximately
-    // N beat intervals away (N = 1, 2, 3, 4).
+    // An onset is "structural" if it has multiple partners at exact beat-interval
+    // multiples. Tolerance does NOT scale with n — tempo drift over 4 beats is
+    // small and scaling made the filter pass nearly everything on dense tracks.
     const toleranceMs = beatIntervalMs * periodicityTolerance;
     const structural = [];
 
     for (const onset of loudOnsets) {
-      let hasPeriodPartner = false;
+      let partnerCount = 0;
 
       for (const other of loudOnsets) {
         if (other === onset) continue;
         const gap = Math.abs(other.time - onset.time);
 
-        for (let n = 1; n <= 4; n++) {
+        // Check if gap is approximately N beat intervals (N = 1, 2)
+        // Only check n=1,2 — higher multiples are too permissive on dense tracks
+        for (let n = 1; n <= 2; n++) {
           const expectedGap = beatIntervalMs * n;
-          if (Math.abs(gap - expectedGap) < toleranceMs * n) {
-            hasPeriodPartner = true;
-            break;
+          if (Math.abs(gap - expectedGap) < toleranceMs) {
+            partnerCount++;
+            break;  // count each partner once
           }
         }
-        if (hasPeriodPartner) break;
       }
 
-      if (hasPeriodPartner) {
+      if (partnerCount >= minPeriodicPartners) {
         structural.push(onset);
       }
     }
+
+    console.log('[PhaseAlign] Selective step 3: ' + structural.length +
+      ' periodic onsets (need ' + minPeriodicPartners + '+ partners within ±' +
+      toleranceMs.toFixed(1) + 'ms of beat interval ' + beatIntervalMs.toFixed(1) + 'ms)');
 
     // Step 4: Check minimum count
     if (structural.length < minStructuralOnsets) {
@@ -256,9 +266,8 @@ const PhaseAlignment = (function () {
     }
 
     console.log('[PhaseAlign] Selective: ' + structural.length +
-      ' structural onsets from ' + onsets.length + ' total' +
-      ' (amp threshold=' + ampThreshold.toFixed(4) +
-      ', periodicity tolerance=±' + toleranceMs.toFixed(1) + 'ms)');
+      ' structural onsets from ' + onsets.length + ' total (' +
+      (structural.length / onsets.length * 100).toFixed(1) + '%)');
     return structural;
   }
 
