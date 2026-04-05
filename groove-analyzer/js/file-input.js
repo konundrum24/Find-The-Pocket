@@ -286,17 +286,37 @@ const FileInput = (function () {
    *
    * @param {Float32Array} pcm - mono PCM at 44100 Hz
    * @param {number} sampleRate - must be 44100
-   * @param {number} sensitivity - onset detection sensitivity (default 8)
-   * @param {number} cooldownMs - cooldown between onsets (default 80)
+   * @param {number|Object} sensitivityOrParams - sensitivity number (legacy) or params object
+   * @param {number} [cooldownMs] - cooldown between onsets (default 80), ignored if params object used
    * @returns {{sessionOnsets: Array, bandOnsets: Object, fluxEnvelope: Array, fluxFrameRate: number}}
    */
-  function detectOnsetsOffline(pcm, sampleRate, sensitivity, cooldownMs) {
-    sensitivity = sensitivity || 8;
-    cooldownMs = cooldownMs || 80;
+  function detectOnsetsOffline(pcm, sampleRate, sensitivityOrParams, cooldownMs) {
+    // Support both legacy (sensitivity, cooldownMs) and new params object API
+    let sensitivity, fftSizeHF, fftSizeLF, bufferSizeHF, bufferSizeLF;
+    if (sensitivityOrParams && typeof sensitivityOrParams === 'object') {
+      const p = sensitivityOrParams;
+      sensitivity = p.sensitivity || 8;
+      cooldownMs = p.cooldownMs || 80;
+      fftSizeHF = p.fftSizeHF || HF_FFT_SIZE;
+      fftSizeLF = p.fftSizeLF || LF_FFT_SIZE;
+      bufferSizeHF = p.bufferSizeHF || HF_BUFFER_SIZE;
+      bufferSizeLF = p.bufferSizeLF || LF_BUFFER_SIZE;
+    } else {
+      sensitivity = sensitivityOrParams || 8;
+      cooldownMs = cooldownMs || 80;
+      fftSizeHF = HF_FFT_SIZE;
+      fftSizeLF = LF_FFT_SIZE;
+      bufferSizeHF = HF_BUFFER_SIZE;
+      bufferSizeLF = LF_BUFFER_SIZE;
+    }
     const cooldownSamples = Math.floor((cooldownMs / 1000) * sampleRate);
 
+    // Recompute warmup frames based on actual buffer size
+    const warmupFramesHF = Math.ceil((AUTO_GAIN_WINDOW + 5) * HF_BUFFER_SIZE / bufferSizeHF);
+    const warmupFramesLF = Math.ceil(warmupFramesHF / 2);
+
     // ── Auto-gain: measure peak over first ~0.5s ──
-    const autoGainSamples = AUTO_GAIN_WINDOW * HF_BUFFER_SIZE;
+    const autoGainSamples = AUTO_GAIN_WINDOW * bufferSizeHF;
     let peakAmp = 0;
     const measEnd = Math.min(autoGainSamples, pcm.length);
     for (let i = 0; i < measEnd; i++) {
@@ -314,24 +334,34 @@ const FileInput = (function () {
     for (let i = 0; i < pcm.length; i++) gained[i] = pcm[i] * gain;
 
     // ── Precompute windows and FFT buffers ──
-    const hfWindow = blackmanWindow(HF_FFT_SIZE);
-    const lfWindow = blackmanWindow(LF_FFT_SIZE);
-    const hfReal = new Float64Array(HF_FFT_SIZE);
-    const hfImag = new Float64Array(HF_FFT_SIZE);
-    const lfReal = new Float64Array(LF_FFT_SIZE);
-    const lfImag = new Float64Array(LF_FFT_SIZE);
+    const hfWindow = blackmanWindow(fftSizeHF);
+    const lfWindow = blackmanWindow(fftSizeLF);
+    const hfReal = new Float64Array(fftSizeHF);
+    const hfImag = new Float64Array(fftSizeHF);
+    const lfReal = new Float64Array(fftSizeLF);
+    const lfImag = new Float64Array(fftSizeLF);
 
     // ── HF path state ──
-    let hfPrevSpectrum = new Float32Array(HF_FFT_SIZE >> 1).fill(-100);
+    let hfPrevSpectrum = new Float32Array(fftSizeHF >> 1).fill(-100);
     let hfPrevFlux = 0, hfPrevPrevFlux = 0, hfPeakEnv = 0.001;
     let hfLastOnsetSample = 0, hfPrevFrameTimeMs = 0;
     const sessionOnsets = [];
     const fluxEnvelope = [];
-    const fluxFrameRate = sampleRate / HF_BUFFER_SIZE;
+    const fluxFrameRate = sampleRate / bufferSizeHF;
+
+    // Recompute HF band bin ranges if FFT size changed from default
+    const hfBinScale = fftSizeHF / HF_FFT_SIZE;
+    const activeBandsHF = HF_BANDS.map(b => ({
+      ...b,
+      binStart: Math.round(b.binStart * hfBinScale),
+      binEnd: Math.round(b.binEnd * hfBinScale)
+    }));
+    const bbBinStart = Math.round(BB_BIN_START * hfBinScale);
+    const bbBinEnd = Math.round(BB_BIN_END * hfBinScale);
 
     // Per-band state for HF bands
     const hfBandState = {};
-    for (const b of HF_BANDS) {
+    for (const b of activeBandsHF) {
       hfBandState[b.name] = {
         prevFlux: 0, prevPrevFlux: 0, prevFrameTimeMs: 0,
         peakEnv: 0.001, lastOnsetSample: 0, allOnsets: []
@@ -339,42 +369,50 @@ const FileInput = (function () {
     }
 
     // ── LF path state ──
-    let lfPrevSpectrum = new Float32Array(LF_FFT_SIZE >> 1).fill(-100);
+    let lfPrevSpectrum = new Float32Array(fftSizeLF >> 1).fill(-100);
+    // Recompute LF band bin ranges if FFT size changed from default
+    const lfBinScale = fftSizeLF / LF_FFT_SIZE;
+    const activeBandsLF = LF_BANDS.map(b => ({
+      ...b,
+      binStart: Math.round(b.binStart * lfBinScale),
+      binEnd: Math.round(b.binEnd * lfBinScale)
+    }));
+
     const lfBandState = {};
-    for (const b of LF_BANDS) {
+    for (const b of activeBandsLF) {
       lfBandState[b.name] = {
         prevFlux: 0, prevPrevFlux: 0, prevFrameTimeMs: 0,
         peakEnv: 0.001, lastOnsetSample: 0, allOnsets: []
       };
     }
 
-    // ── Process HF path (hop=512, fft=1024) ──
+    // ── Process HF path ──
     let hfTotalSamples = 0;
-    let hfWarmup = WARMUP_FRAMES_HF;
-    const hfFrameDurationMs = (HF_BUFFER_SIZE / sampleRate) * 1000;
+    let hfWarmup = warmupFramesHF;
+    const hfFrameDurationMs = (bufferSizeHF / sampleRate) * 1000;
 
-    for (let frameStart = 0; frameStart + HF_FFT_SIZE <= gained.length; frameStart += HF_BUFFER_SIZE) {
-      const frameTimeMs = ((frameStart + HF_BUFFER_SIZE / 2) / sampleRate) * 1000;
-      hfTotalSamples += HF_BUFFER_SIZE;
+    for (let frameStart = 0; frameStart + fftSizeHF <= gained.length; frameStart += bufferSizeHF) {
+      const frameTimeMs = ((frameStart + bufferSizeHF / 2) / sampleRate) * 1000;
+      hfTotalSamples += bufferSizeHF;
 
       // Get spectrum
-      const samples = gained.subarray(frameStart, frameStart + HF_FFT_SIZE);
+      const samples = gained.subarray(frameStart, frameStart + fftSizeHF);
       const spectrum = computeSpectrum(samples, hfWindow, hfReal, hfImag);
 
       // Broadband flux
       let flux = 0;
-      const end = Math.min(BB_BIN_END, spectrum.length);
-      for (let i = BB_BIN_START; i < end; i++) {
+      const end = Math.min(bbBinEnd, spectrum.length);
+      for (let i = bbBinStart; i < end; i++) {
         const curr = Math.pow(10, spectrum[i] / 20);
         const prev = Math.pow(10, hfPrevSpectrum[i] / 20);
         const diff = curr - prev;
         if (diff > 0) flux += diff;
       }
-      flux /= (end - BB_BIN_START);
+      flux /= (end - bbBinStart);
 
       // Per-band flux
       const bandFlux = {};
-      for (const band of HF_BANDS) {
+      for (const band of activeBandsHF) {
         let bf = 0;
         const bEnd = Math.min(band.binEnd, spectrum.length);
         for (let i = band.binStart; i < bEnd; i++) {
@@ -401,7 +439,7 @@ const FileInput = (function () {
       if (hfWarmup > 0) hfWarmup--;
 
       // Per-band onset detection
-      for (const band of HF_BANDS) {
+      for (const band of activeBandsHF) {
         const bs = hfBandState[band.name];
         const bf = bandFlux[band.name];
         if (bf > bs.peakEnv) bs.peakEnv = bf;
@@ -423,7 +461,7 @@ const FileInput = (function () {
               delta = Math.max(-0.5, Math.min(0.5, delta));
             }
             const refinedTime = bs.prevFrameTimeMs + delta * hfFrameDurationMs;
-            bs.lastOnsetSample = hfTotalSamples - HF_BUFFER_SIZE;
+            bs.lastOnsetSample = hfTotalSamples - bufferSizeHF;
             bs.allOnsets.push({ time: refinedTime, amplitude: bs.prevFlux });
           }
         }
@@ -448,7 +486,7 @@ const FileInput = (function () {
             delta = Math.max(-0.5, Math.min(0.5, delta));
           }
           const refinedTime = hfPrevFrameTimeMs + delta * hfFrameDurationMs;
-          hfLastOnsetSample = hfTotalSamples - HF_BUFFER_SIZE;
+          hfLastOnsetSample = hfTotalSamples - bufferSizeHF;
           sessionOnsets.push({ time: refinedTime, amplitude: hfPrevFlux });
         }
       }
@@ -458,21 +496,21 @@ const FileInput = (function () {
       hfPrevFlux = flux;
     }
 
-    // ── Process LF path (hop=1024, fft=4096) ──
+    // ── Process LF path ──
     let lfTotalSamples = 0;
-    let lfWarmup = WARMUP_FRAMES_LF;
-    const lfFrameDurationMs = (LF_BUFFER_SIZE / sampleRate) * 1000;
+    let lfWarmup = warmupFramesLF;
+    const lfFrameDurationMs = (bufferSizeLF / sampleRate) * 1000;
 
-    for (let frameStart = 0; frameStart + LF_FFT_SIZE <= gained.length; frameStart += LF_BUFFER_SIZE) {
-      const frameTimeMs = ((frameStart + LF_BUFFER_SIZE / 2) / sampleRate) * 1000;
-      lfTotalSamples += LF_BUFFER_SIZE;
+    for (let frameStart = 0; frameStart + fftSizeLF <= gained.length; frameStart += bufferSizeLF) {
+      const frameTimeMs = ((frameStart + bufferSizeLF / 2) / sampleRate) * 1000;
+      lfTotalSamples += bufferSizeLF;
 
-      const samples = gained.subarray(frameStart, frameStart + LF_FFT_SIZE);
+      const samples = gained.subarray(frameStart, frameStart + fftSizeLF);
       const spectrum = computeSpectrum(samples, lfWindow, lfReal, lfImag);
 
       // Per-band flux
       const bandFlux = {};
-      for (const band of LF_BANDS) {
+      for (const band of activeBandsLF) {
         let bf = 0;
         const bEnd = Math.min(band.binEnd, spectrum.length);
         for (let i = band.binStart; i < bEnd; i++) {
@@ -491,7 +529,7 @@ const FileInput = (function () {
       if (lfWarmup > 0) lfWarmup--;
 
       // Per-band onset detection for LF
-      for (const band of LF_BANDS) {
+      for (const band of activeBandsLF) {
         const bs = lfBandState[band.name];
         const bf = bandFlux[band.name];
         if (bf > bs.peakEnv) bs.peakEnv = bf;
@@ -513,7 +551,7 @@ const FileInput = (function () {
               delta = Math.max(-0.5, Math.min(0.5, delta));
             }
             const refinedTime = bs.prevFrameTimeMs + delta * lfFrameDurationMs;
-            bs.lastOnsetSample = lfTotalSamples - LF_BUFFER_SIZE;
+            bs.lastOnsetSample = lfTotalSamples - bufferSizeLF;
             bs.allOnsets.push({ time: refinedTime, amplitude: bs.prevFlux });
           }
         }

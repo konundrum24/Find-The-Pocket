@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Find The Pocket — Test Harness</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: #0f0f1a;
+      color: #e2e2f0;
+      padding: 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 24px; margin-bottom: 4px; }
+    h2 { font-size: 18px; margin: 16px 0 8px; color: #a0a0c0; }
+    h3 { font-size: 16px; margin: 12px 0 8px; }
+
+    .subtitle { color: #6b6b8a; font-size: 14px; margin-bottom: 24px; }
+    .warning { color: #fbbf24; font-size: 13px; margin-top: 8px; }
+
+    /* Config panel */
+    #config-panel { margin-bottom: 24px; }
+    #config-editor {
+      width: 100%;
+      min-height: 300px;
+      background: #1a1a2e;
+      color: #c0c0e0;
+      border: 1px solid #2a2a4a;
+      border-radius: 8px;
+      padding: 12px;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      resize: vertical;
+      tab-size: 2;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-block;
+      padding: 10px 24px;
+      border: none;
+      border-radius: 8px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-primary {
+      background: #1d9e75;
+      color: white;
+    }
+    .btn-primary:hover { background: #25b888; }
+    .btn-primary:disabled { background: #2a2a4a; color: #6b6b8a; cursor: not-allowed; }
+    .btn-secondary {
+      background: #2a2a4a;
+      color: #c0c0e0;
+      margin-left: 8px;
+    }
+    .btn-secondary:hover { background: #3a3a5a; }
+
+    .btn-row { margin-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+    /* File upload */
+    .file-upload {
+      margin-top: 16px;
+      padding: 16px;
+      background: #1a1a2e;
+      border: 1px dashed #2a2a4a;
+      border-radius: 8px;
+    }
+    .file-upload label { font-weight: 600; display: block; margin-bottom: 8px; }
+    .file-list { margin-top: 8px; font-size: 13px; color: #a0a0c0; }
+
+    /* Progress */
+    #progress-panel { display: none; margin: 24px 0; }
+    .progress-bar-container {
+      width: 100%;
+      height: 8px;
+      background: #1a1a2e;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 8px 0;
+    }
+    #progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #1d9e75;
+      transition: width 0.3s ease;
+      border-radius: 4px;
+    }
+    #progress-text { font-size: 14px; font-weight: 600; }
+    #progress-detail { font-size: 13px; color: #a0a0c0; margin-top: 4px; }
+    #progress-eta { font-size: 13px; color: #6b6b8a; margin-top: 4px; }
+
+    /* Results */
+    #results-panel { display: none; }
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-top: 8px;
+    }
+    .results-table th {
+      text-align: left;
+      padding: 6px 10px;
+      background: #1a1a2e;
+      border-bottom: 2px solid #2a2a4a;
+      color: #a0a0c0;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .results-table td {
+      padding: 6px 10px;
+      border-bottom: 1px solid #1a1a2e;
+      white-space: nowrap;
+    }
+    .results-table tr:hover td { background: #1a1a2e; }
+    .row-correct td { background: rgba(29, 158, 117, 0.08); }
+    .row-wrong td { background: rgba(248, 113, 113, 0.08); }
+
+    details { margin-top: 12px; }
+    summary { cursor: pointer; font-weight: 600; }
+
+    /* Status badge */
+    #essentia-status {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .status-loading { background: #2a2a4a; color: #fbbf24; }
+    .status-ready { background: #0d3d2e; color: #34d399; }
+    .status-failed { background: #3d1a1a; color: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>Find The Pocket — Test Harness</h1>
+  <p class="subtitle">
+    Automated experiment runner
+    <span id="essentia-status" class="status-loading">Essentia loading...</span>
+  </p>
+
+  <!-- ── Configuration Panel ── -->
+  <div id="config-panel">
+    <h2>Experiment Configuration</h2>
+    <textarea id="config-editor">{
+  songs: [
+    {
+      name: 'Chicken Grease',
+      file: 'test-audio/chicken-grease.m4a',
+      expectedPocket: 'behind',
+      segments: [
+        { start: 92, end: 157, label: '1:32-2:37' },
+      ]
+    },
+  ],
+
+  phaseConfigs: ['A', 'B', 'C'],
+
+  engineParams: [
+    {
+      label: 'default',
+      fftHF: 1024, fftLF: 4096,
+      bufferHF: 512, bufferLF: 2048,
+      sensitivity: 8
+    },
+  ],
+
+  runsPerCombination: 1,
+  trimJitterMs: 0,
+}</textarea>
+
+    <div class="btn-row">
+      <button id="start-btn" class="btn btn-primary" disabled onclick="startExperiment()">
+        Start Experiment
+      </button>
+      <button class="btn btn-secondary" onclick="resetConfig()">Reset to Default</button>
+    </div>
+
+    <div class="file-upload">
+      <label>Upload audio files (alternative to test-audio/ directory):</label>
+      <input type="file" id="audio-files" accept="audio/*" multiple onchange="handleFileUpload(event)">
+      <div id="file-list" class="file-list"></div>
+    </div>
+
+    <p class="warning">Keep this tab in the foreground during the experiment. Background tabs may be throttled.</p>
+  </div>
+
+  <!-- ── Progress Panel ── -->
+  <div id="progress-panel">
+    <h2>Running Experiment...</h2>
+    <div class="progress-bar-container">
+      <div id="progress-bar"></div>
+    </div>
+    <p id="progress-text">0 / 0</p>
+    <p id="progress-detail"></p>
+    <p id="progress-eta"></p>
+  </div>
+
+  <!-- ── Results Panel ── -->
+  <div id="results-panel">
+    <h2>Results</h2>
+    <div id="summary-table-container"></div>
+    <div class="btn-row" style="margin-top:16px">
+      <button class="btn btn-primary" onclick="TestHarness.exportResults()">Export JSON + CSV</button>
+    </div>
+  </div>
+
+  <!-- ── Load analysis library scripts (same order as index.html, minus app.js) ── -->
+  <script src="js/audio.js"></script>
+  <script src="js/onset-detector.js"></script>
+  <script src="js/grid.js"></script>
+  <script src="js/analysis.js"></script>
+  <script src="js/tempo-estimator.js"></script>
+  <script src="js/grid-estimator.js"></script>
+  <script src="js/adaptive-grid.js"></script>
+  <script src="js/pattern-grid.js"></script>
+  <script src="js/phase-alignment.js"></script>
+  <script src="js/flux-tempo.js"></script>
+  <script src="js/metric-selector.js"></script>
+  <script src="js/feedback.js"></script>
+  <script src="js/visualizations.js"></script>
+  <script src="js/diagnostics.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/pocket-targets.js"></script>
+  <script src="js/file-input.js"></script>
+  <script src="js/experiment-log.js"></script>
+
+  <!-- Essentia WASM -->
+  <script src="https://cdn.jsdelivr.net/npm/essentia.js@0.1.3/dist/essentia-wasm.web.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/essentia.js@0.1.3/dist/essentia.js-core.js"></script>
+
+  <!-- Test harness (loaded LAST) -->
+  <script src="js/test-harness.js"></script>
+
+  <script>
+    // ── Uploaded files map (name -> File object) ──
+    const uploadedFiles = {};
+
+    // ── Initialize Essentia and enable start button ──
+    (async function () {
+      const statusEl = document.getElementById('essentia-status');
+      const startBtn = document.getElementById('start-btn');
+      try {
+        await TestHarness.initEssentia();
+        if (TestHarness.essentiaReady) {
+          statusEl.textContent = 'Essentia ready';
+          statusEl.className = 'status-ready';
+          startBtn.disabled = false;
+        } else {
+          statusEl.textContent = 'Essentia unavailable';
+          statusEl.className = 'status-failed';
+        }
+      } catch (e) {
+        statusEl.textContent = 'Essentia failed';
+        statusEl.className = 'status-failed';
+        console.error(e);
+      }
+    })();
+
+    // ── File upload handler ──
+    function handleFileUpload(event) {
+      const files = event.target.files;
+      const listEl = document.getElementById('file-list');
+      for (const file of files) {
+        // Map by filename without extension as potential song name
+        const name = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
+        uploadedFiles[name] = file;
+      }
+      // Also allow exact name matching
+      for (const file of files) {
+        uploadedFiles[file.name] = file;
+      }
+
+      listEl.textContent = Object.keys(uploadedFiles).length + ' file(s) uploaded: ' +
+        Array.from(files).map(f => f.name).join(', ');
+
+      // Enable start even without Essentia status (files loaded)
+      const startBtn = document.getElementById('start-btn');
+      if (TestHarness.essentiaReady) startBtn.disabled = false;
+    }
+
+    // ── Start experiment ──
+    async function startExperiment() {
+      const config = TestHarness.getConfigFromUI();
+      if (!config) return;
+
+      const startBtn = document.getElementById('start-btn');
+      startBtn.disabled = true;
+      document.getElementById('config-panel').style.display = 'none';
+
+      try {
+        await TestHarness.runExperimentSuite(config, uploadedFiles);
+      } catch (e) {
+        console.error('[Harness] Experiment failed:', e);
+        alert('Experiment failed: ' + e.message);
+      }
+
+      startBtn.disabled = false;
+    }
+
+    // ── Reset config ──
+    function resetConfig() {
+      const editor = document.getElementById('config-editor');
+      // Pretty-print default config
+      const cfg = TestHarness.DEFAULT_EXPERIMENT;
+      editor.value = JSON.stringify(cfg, null, 2)
+        .replace(/"(\w+)":/g, '$1:')  // Remove quotes from keys for readability
+        .replace(/"/g, "'");           // Single quotes for strings
+    }
+  </script>
+</body>
+</html>
