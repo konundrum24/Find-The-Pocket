@@ -9,6 +9,22 @@
 // ============================================
 
 const App = (() => {
+  // ── Experiment URL Parameters ──
+  const urlParams = new URLSearchParams(window.location.search);
+  const PHASE_CONFIG = (urlParams.get('phase') || 'A').toUpperCase();
+  const DEVICE_ID = urlParams.get('device') || 'unknown';
+  const MANUAL_RUN = urlParams.get('run') ? parseInt(urlParams.get('run')) : null;
+  const IS_EXPERIMENT = urlParams.has('phase');
+  const IS_BATCH = urlParams.get('batch') === 'true';
+  const BATCH_RUNS = parseInt(urlParams.get('runs')) || 10;
+  const BATCH_JITTER = parseInt(urlParams.get('jitter')) || 0;
+  const FILE_TRIM_START = urlParams.has('start') ? parseFloat(urlParams.get('start')) : null;
+  const FILE_TRIM_END = urlParams.has('end') ? parseFloat(urlParams.get('end')) : null;
+  const VIEW_MODE = urlParams.get('view'); // 'experiment' shows summary view
+
+  // Mutable config for batch mode (overridden per-run)
+  let currentPhaseConfig = PHASE_CONFIG;
+
   // ── State ──
   let tempo = 90;
   let sensitivity = 8;
@@ -23,6 +39,12 @@ const App = (() => {
   let freePlayOnsetTimes = []; // raw onset times for tempo estimation
   let liveBpmEstimate = null;
   let lastCoarseBpm = null; // coarse estimate before refinement
+
+  // File input state
+  let loadedAudioData = null; // {pcm, sampleRate, duration, audioBuffer}
+  let fileTrimStart = 0;
+  let fileTrimEnd = 0;
+  let isFileInputMode = false;
 
   // Essentia.js state
   let essentia = null;
@@ -57,6 +79,48 @@ const App = (() => {
     }
   }
   initEssentia();
+
+  // ── Experiment Config Badge + View ──
+  function initExperimentUI() {
+    // Config badge (visible when experiment params present)
+    if (IS_EXPERIMENT || IS_BATCH) {
+      const badge = document.getElementById('config-badge');
+      if (badge) {
+        const colors = { A: '#6b7280', B: '#3b82f6', C: '#10b981' };
+        badge.style.display = 'flex';
+        badge.style.background = colors[currentPhaseConfig] || '#6b7280';
+        let text = currentPhaseConfig;
+        if (DEVICE_ID !== 'unknown') text += ' \u00b7 ' + DEVICE_ID;
+        if (MANUAL_RUN) text += ' \u00b7 run ' + MANUAL_RUN;
+        badge.textContent = text;
+      }
+    }
+    // Experiment summary view
+    if (VIEW_MODE === 'experiment') {
+      const container = document.getElementById('experiment-summary-container');
+      if (container) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById('screen-experiment').classList.add('active');
+        ExperimentLog.renderSummary(container);
+      }
+    }
+  }
+  // Defer to after DOM ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initExperimentUI);
+  } else {
+    setTimeout(initExperimentUI, 0);
+  }
+
+  function updateConfigBadge(config) {
+    const badge = document.getElementById('config-badge');
+    if (!badge) return;
+    const colors = { A: '#6b7280', B: '#3b82f6', C: '#10b981' };
+    badge.style.background = colors[config] || '#6b7280';
+    let text = config;
+    if (DEVICE_ID !== 'unknown') text += ' \u00b7 ' + DEVICE_ID;
+    badge.textContent = text;
+  }
 
   // ── Live BPM Estimation (main thread, using already-loaded Essentia) ──
   function startBpmEstimation() {
@@ -1069,10 +1133,41 @@ const App = (() => {
       if (anchors) {
         console.log('[Groove] Using Essentia.js beat positions (' + anchors.length + ' anchors)');
 
-        // Phase correction disabled — Essentia's grid is ground truth.
-        // The onset-anchored phase correction was pulling the grid toward
-        // center, erasing the laid-back feel on tracks like Chicken Grease.
-        // Essentia already places beats where they are in the audio.
+        // Phase correction: gated by experiment config
+        if (currentPhaseConfig === 'B') {
+          // Config B: Full phase correction — all onsets (v0.6 behavior)
+          const phaseResult = PhaseAlignment.correctPhase(anchors, sessionOnsets);
+          if (phaseResult.improved) {
+            anchors = phaseResult.anchors;
+            onsetPhaseShiftMs = phaseResult.phaseShiftMs;
+            console.log('[Config B] Phase correction applied: ' +
+              (phaseResult.phaseShiftMs >= 0 ? '+' : '') + phaseResult.phaseShiftMs.toFixed(1) + 'ms');
+          } else {
+            console.log('[Config B] Phase correction skipped (below improvement threshold)');
+          }
+        } else if (currentPhaseConfig === 'C') {
+          // Config C: Selective phase correction — structural onsets only
+          // Compute average beat interval from anchors
+          const avgIntervalMs = (anchors[anchors.length - 1].time - anchors[0].time) / (anchors.length - 1);
+          const beatIntervalMs = avgIntervalMs;
+          const structuralOnsets = PhaseAlignment.selectStructuralOnsets(sessionOnsets, beatIntervalMs);
+
+          if (structuralOnsets) {
+            const phaseResult = PhaseAlignment.correctPhase(anchors, structuralOnsets);
+            if (phaseResult.improved) {
+              anchors = phaseResult.anchors;
+              onsetPhaseShiftMs = phaseResult.phaseShiftMs;
+              console.log('[Config C] Selective phase correction applied: ' +
+                (phaseResult.phaseShiftMs >= 0 ? '+' : '') + phaseResult.phaseShiftMs.toFixed(1) + 'ms' +
+                ' (' + structuralOnsets.length + ' structural onsets of ' + sessionOnsets.length + ' total)');
+            } else {
+              console.log('[Config C] Phase correction skipped (below improvement threshold)');
+            }
+          } else {
+            console.log('[Config C] Insufficient structural onsets — falling back to Essentia raw');
+          }
+        }
+        // Config A: no modification to anchors (Essentia raw — current behavior)
       }
       console.log('[Groove] ⏱ Essentia:', Math.round(performance.now() - t0) + 'ms');
     }
@@ -1290,6 +1385,43 @@ const App = (() => {
     session._diagnostics = diagReport;
     session._gridUnitMs = grid.medianGridUnitMs;
     session._phaseShiftMs = onsetPhaseShiftMs;
+
+    // ── Experiment logging ──
+    if (IS_EXPERIMENT || IS_BATCH) {
+      const totalAnalysisMs = Math.round(performance.now() - t0);
+      ExperimentLog.saveResult({
+        overallPosition: weightedMetrics.position,
+        overallConsistency: weightedMetrics.consistency,
+        bpm: globalBpm,
+        swing: swingResult ? swingResult.swingPercent : null,
+        downbeatPosition: weightedMetrics.downbeats ? weightedMetrics.downbeats.position : null,
+        downbeatConsistency: weightedMetrics.downbeats ? weightedMetrics.downbeats.consistency : null,
+        downbeatCount: weightedMetrics.downbeats ? weightedMetrics.downbeats.count : null,
+        ghostNotePosition: weightedMetrics.subdivisions ? weightedMetrics.subdivisions.position : null,
+        ghostNoteConsistency: weightedMetrics.subdivisions ? weightedMetrics.subdivisions.consistency : null,
+        ghostNoteCount: weightedMetrics.subdivisions ? weightedMetrics.subdivisions.count : null,
+        bandAnalysis,
+        drumCounts,
+        phaseOffsetMs: onsetPhaseShiftMs,
+        structuralOnsetCount: currentPhaseConfig === 'C' ? (onsetPhaseShiftMs != null ? sessionOnsets.length : null) : null,
+        totalOnsetCount: sessionOnsets.length,
+        gridPhaseError: diagReport ? diagReport.phaseError : null,
+        clusterStrength: diagReport ? diagReport.clusterStrength : null,
+        drift: diagReport ? diagReport.drift : null,
+        essentiaProcessingMs: null,
+        totalAnalysisMs: totalAnalysisMs,
+        fileInput: isFileInputMode ? {
+          filename: loadedAudioData ? loadedAudioData.filename : 'unknown',
+          trimStart: fileTrimStart,
+          trimEnd: fileTrimEnd,
+          analyzedDuration: fileTrimEnd - fileTrimStart,
+        } : null,
+      }, {
+        config: currentPhaseConfig,
+        device: DEVICE_ID,
+        runNumber: MANUAL_RUN,
+      });
+    }
 
     return session;
   }
@@ -1852,6 +1984,278 @@ const App = (() => {
     if (pulseInterval) { clearInterval(pulseInterval); pulseInterval = null; }
   }
 
+  // ── File Input ──────────────────────────────────────────────────────────
+
+  /** Handle file selection from the file picker. */
+  async function handleFileSelect(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+
+    const statusEl = document.getElementById('file-status');
+    const analyzeBtn = document.getElementById('file-analyze-btn');
+    const waveformSection = document.getElementById('file-waveform-section');
+
+    if (statusEl) statusEl.textContent = 'Loading...';
+    if (analyzeBtn) analyzeBtn.disabled = true;
+
+    try {
+      loadedAudioData = await FileInput.loadAudioFile(file);
+      loadedAudioData.filename = file.name;
+      fileTrimStart = FILE_TRIM_START || 0;
+      fileTrimEnd = FILE_TRIM_END || loadedAudioData.duration;
+
+      // Update trim controls
+      const startInput = document.getElementById('file-trim-start');
+      const endInput = document.getElementById('file-trim-end');
+      if (startInput) startInput.value = FileInput.formatTime(fileTrimStart);
+      if (endInput) endInput.value = FileInput.formatTime(fileTrimEnd);
+
+      const durEl = document.getElementById('file-duration');
+      if (durEl) durEl.textContent = 'Analyzing ' + FileInput.formatTime(fileTrimStart) +
+        ' to ' + FileInput.formatTime(fileTrimEnd) +
+        ' (' + FileInput.formatTime(fileTrimEnd - fileTrimStart) + ')';
+
+      // Render waveform
+      if (waveformSection) waveformSection.style.display = 'block';
+      const canvas = document.getElementById('file-waveform');
+      if (canvas && loadedAudioData.audioBuffer) {
+        FileInput.renderWaveform(loadedAudioData.audioBuffer, canvas, fileTrimStart, fileTrimEnd);
+      }
+
+      if (statusEl) statusEl.textContent = file.name + ' (' + FileInput.formatTime(loadedAudioData.duration) + ')';
+      if (analyzeBtn) analyzeBtn.disabled = false;
+    } catch (err) {
+      if (statusEl) statusEl.textContent = 'Error: ' + err.message;
+      loadedAudioData = null;
+    }
+  }
+
+  /** Update trim from user input. */
+  function updateFileTrim() {
+    if (!loadedAudioData) return;
+
+    const startStr = document.getElementById('file-trim-start').value;
+    const endStr = document.getElementById('file-trim-end').value;
+    fileTrimStart = parseTimeStr(startStr);
+    fileTrimEnd = parseTimeStr(endStr);
+    if (fileTrimEnd <= fileTrimStart) fileTrimEnd = loadedAudioData.duration;
+    if (fileTrimEnd > loadedAudioData.duration) fileTrimEnd = loadedAudioData.duration;
+
+    const durEl = document.getElementById('file-duration');
+    if (durEl) durEl.textContent = 'Analyzing ' + FileInput.formatTime(fileTrimStart) +
+      ' to ' + FileInput.formatTime(fileTrimEnd) +
+      ' (' + FileInput.formatTime(fileTrimEnd - fileTrimStart) + ')';
+
+    // Re-render waveform with new trim
+    const canvas = document.getElementById('file-waveform');
+    if (canvas && loadedAudioData.audioBuffer) {
+      FileInput.renderWaveform(loadedAudioData.audioBuffer, canvas, fileTrimStart, fileTrimEnd);
+    }
+  }
+
+  /** Parse "M:SS" or seconds string. */
+  function parseTimeStr(str) {
+    if (!str) return 0;
+    if (str.includes(':')) {
+      const parts = str.split(':');
+      return parseInt(parts[0]) * 60 + parseFloat(parts[1] || 0);
+    }
+    return parseFloat(str) || 0;
+  }
+
+  /** Auto-detect groove start and set trim. */
+  function autoTrimFile() {
+    if (!loadedAudioData) return;
+    const grooveStart = FileInput.detectGrooveStart(loadedAudioData.pcm, loadedAudioData.sampleRate);
+    fileTrimStart = grooveStart;
+    document.getElementById('file-trim-start').value = FileInput.formatTime(fileTrimStart);
+    updateFileTrim();
+  }
+
+  /**
+   * Analyze a loaded audio file through the full pipeline.
+   * This is the file-input equivalent of stopFreePlayRecording().
+   */
+  async function analyzeFile() {
+    if (!loadedAudioData) {
+      alert('No audio file loaded.');
+      return;
+    }
+
+    isFileInputMode = true;
+    sessionStartTime = 0;
+
+    const trimmedPCM = FileInput.trimPCM(
+      loadedAudioData.pcm, loadedAudioData.sampleRate, fileTrimStart, fileTrimEnd
+    );
+
+    console.log('[FileInput] Analyzing ' + FileInput.formatTime(fileTrimStart) +
+      ' to ' + FileInput.formatTime(fileTrimEnd) +
+      ' (' + trimmedPCM.length + ' samples)');
+
+    // Show processing indicator
+    showScreen('screen-fp-rec');
+    document.getElementById('fp-ps').textContent = 'Processing file...';
+
+    // Allow UI to update
+    await new Promise(r => setTimeout(r, 50));
+
+    const result = await analyzeFileInput(trimmedPCM, loadedAudioData.sampleRate, currentPhaseConfig);
+    if (!result) {
+      showScreen('screen-fp-setup');
+      isFileInputMode = false;
+      return;
+    }
+
+    Storage.saveSession(result);
+    renderResults(result);
+
+    // Show export button on results if experiment mode
+    if (IS_EXPERIMENT) {
+      const exportBtn = document.getElementById('experiment-export-btn');
+      if (exportBtn) exportBtn.style.display = '';
+    }
+
+    isFileInputMode = false;
+  }
+
+  /**
+   * Core file analysis: onset detection + Essentia + full pipeline.
+   * Shared between single-file analysis and batch runner.
+   *
+   * @param {Float32Array} trimmedPCM
+   * @param {number} sampleRate
+   * @param {string} config - 'A', 'B', or 'C'
+   * @returns {Object|null} session object
+   */
+  async function analyzeFileInput(trimmedPCM, sampleRate, config) {
+    const prevConfig = currentPhaseConfig;
+    currentPhaseConfig = config;
+    updateConfigBadge(config);
+
+    const t0 = performance.now();
+
+    // Step 1: Offline onset detection (replaces real-time ScriptProcessor)
+    const detection = FileInput.detectOnsetsOffline(trimmedPCM, sampleRate, sensitivity);
+    sessionOnsets = detection.sessionOnsets;
+    freePlayOnsetTimes = sessionOnsets.map(o => o.time);
+
+    console.log('[FileInput] Offline detection: ' + sessionOnsets.length + ' onsets in ' +
+      Math.round(performance.now() - t0) + 'ms');
+
+    if (sessionOnsets.length < 8) {
+      if (!IS_BATCH) alert('Only ' + sessionOnsets.length + ' onsets detected in file. Try adjusting sensitivity or trim range.');
+      console.warn('[FileInput] Only ' + sessionOnsets.length + ' onsets — aborting');
+      currentPhaseConfig = prevConfig;
+      return null;
+    }
+
+    // Step 2: Flux-based coarse BPM
+    const fluxResult = FluxTempo.estimateTempo(detection.fluxEnvelope, detection.fluxFrameRate);
+    let coarseBpm;
+    if (fluxResult.bpm && fluxResult.confidence > 0.05) {
+      const resolved = FluxTempo.resolveMetricLevel(fluxResult.allPeaks);
+      coarseBpm = (resolved && resolved.bpm) ? resolved.bpm : fluxResult.bpm;
+    } else {
+      coarseBpm = TempoEstimator.estimateTempo(freePlayOnsetTimes);
+    }
+
+    if (!coarseBpm) {
+      if (!IS_BATCH) alert('Could not detect tempo from file.');
+      currentPhaseConfig = prevConfig;
+      return null;
+    }
+
+    // Step 3: Essentia beat tracking (file input: timeOffset = 0)
+    const pcmData = {
+      signal: trimmedPCM,
+      sampleRate: sampleRate,
+      pcmStartTime: 0
+    };
+
+    // Suppress alerts during batch mode (analyzeFreePlayAdaptive shows alerts on failure)
+    const origAlert = window.alert;
+    if (IS_BATCH) window.alert = function (msg) { console.warn('[Batch] Suppressed alert:', msg); };
+
+    // Temporarily patch bandOnsets for the pipeline
+    const origGetBandOnsets = OnsetDetector.getBandOnsets;
+    const origGetBands = OnsetDetector.getBands;
+    OnsetDetector.getBandOnsets = function () { return detection.bandOnsets; };
+    OnsetDetector.getBands = function () {
+      return [
+        { name: 'kick', label: 'Kick (40\u2013150 Hz)' },
+        { name: 'bass', label: 'Bass (150\u2013400 Hz)' },
+        { name: 'mid', label: 'Mid (400 Hz\u20132 kHz)' },
+        { name: 'snare', label: 'Snare Crack (2\u20135 kHz)' },
+        { name: 'hihat', label: 'Hi-hat (6\u201316 kHz)' }
+      ];
+    };
+
+    // Run the main analysis pipeline
+    const session = analyzeFreePlayAdaptive(coarseBpm, pcmData);
+
+    // Restore original functions
+    OnsetDetector.getBandOnsets = origGetBandOnsets;
+    OnsetDetector.getBands = origGetBands;
+    if (IS_BATCH) window.alert = origAlert;
+
+    currentPhaseConfig = prevConfig;
+    return session;
+  }
+
+  /**
+   * Run the automated batch experiment.
+   */
+  async function runBatchExperiment() {
+    if (!loadedAudioData) {
+      alert('Load an audio file first.');
+      return;
+    }
+
+    const overlay = document.getElementById('batch-overlay');
+    if (overlay) overlay.style.display = 'flex';
+
+    await ExperimentLog.runBatch(loadedAudioData.pcm, loadedAudioData.sampleRate, {
+      runsPerConfig: BATCH_RUNS,
+      trimStart: fileTrimStart,
+      trimEnd: fileTrimEnd,
+      jitterMs: BATCH_JITTER,
+      filename: loadedAudioData.filename,
+      sensitivity: sensitivity,
+      onProgress: function (completed, total, config, run) {
+        const progressEl = document.getElementById('batch-progress-text');
+        const barEl = document.getElementById('batch-progress-bar');
+        if (progressEl) progressEl.textContent =
+          'Config ' + config + ' \u00b7 Run ' + run +
+          '\n' + completed + ' / ' + total + ' total';
+        if (barEl) barEl.style.width = Math.round((completed / total) * 100) + '%';
+      },
+      analyzeFunc: analyzeFileInput
+    });
+
+    if (overlay) overlay.style.display = 'none';
+
+    // Show summary
+    const container = document.getElementById('experiment-summary-container');
+    if (container) {
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.getElementById('screen-experiment').classList.add('active');
+      ExperimentLog.renderSummary(container);
+    }
+  }
+
+  /** Show experiment summary view. */
+  function showExperimentSummary() {
+    const container = document.getElementById('experiment-summary-container');
+    if (container) {
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.getElementById('screen-experiment').classList.add('active');
+      document.getElementById('header-tag').textContent = 'Experiment';
+      document.querySelector('.phase-bar').style.display = 'none';
+      ExperimentLog.renderSummary(container);
+    }
+  }
+
   // ── Public API ──
   return {
     changeTempo,
@@ -1876,6 +2280,13 @@ const App = (() => {
     startPlaygroundCalibration,
     selectTarget,
     showHistory,
-    viewSession
+    viewSession,
+    // Experiment / file input
+    handleFileSelect,
+    updateFileTrim,
+    autoTrimFile,
+    analyzeFile,
+    runBatchExperiment,
+    showExperimentSummary
   };
 })();

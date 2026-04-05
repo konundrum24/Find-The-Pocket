@@ -193,12 +193,82 @@ const PhaseAlignment = (function () {
     return { anchors: correctedAnchors, phaseShiftMs, improved: true };
   }
 
+  // ── Selective Phase Correction (Config C) ──────────────────────────────
+
+  /**
+   * Select structurally periodic, high-amplitude onsets for phase correction.
+   * These represent the rhythmic foundation (kick on 1, snare on 2&4) —
+   * the onsets that define WHERE THE BEAT IS, not where the pocket sits.
+   *
+   * @param {Array<{time: number, amplitude: number}>} onsets - sessionOnsets array
+   * @param {number} beatIntervalMs - estimated beat period in ms (from Essentia BPM)
+   * @param {Object} options - tuning parameters
+   * @returns {Array|null} filtered onsets, or null if insufficient
+   */
+  function selectStructuralOnsets(onsets, beatIntervalMs, options) {
+    options = options || {};
+    const periodicityTolerance = options.periodicityTolerance || 0.15;
+    const amplitudePercentile = options.amplitudePercentile || 0.60;
+    const minStructuralOnsets = options.minStructuralOnsets || 8;
+
+    if (onsets.length < minStructuralOnsets) return null;
+
+    // Step 1: Find the amplitude threshold (60th percentile)
+    const sortedAmps = onsets.map(o => o.amplitude).sort((a, b) => a - b);
+    const ampThreshold = sortedAmps[Math.floor(sortedAmps.length * amplitudePercentile)];
+
+    // Step 2: Filter to loud onsets
+    const loudOnsets = onsets.filter(o => o.amplitude >= ampThreshold);
+
+    // Step 3: Among loud onsets, find those with periodic partners.
+    // An onset is "periodic" if there's another loud onset approximately
+    // N beat intervals away (N = 1, 2, 3, 4).
+    const toleranceMs = beatIntervalMs * periodicityTolerance;
+    const structural = [];
+
+    for (const onset of loudOnsets) {
+      let hasPeriodPartner = false;
+
+      for (const other of loudOnsets) {
+        if (other === onset) continue;
+        const gap = Math.abs(other.time - onset.time);
+
+        for (let n = 1; n <= 4; n++) {
+          const expectedGap = beatIntervalMs * n;
+          if (Math.abs(gap - expectedGap) < toleranceMs * n) {
+            hasPeriodPartner = true;
+            break;
+          }
+        }
+        if (hasPeriodPartner) break;
+      }
+
+      if (hasPeriodPartner) {
+        structural.push(onset);
+      }
+    }
+
+    // Step 4: Check minimum count
+    if (structural.length < minStructuralOnsets) {
+      console.log('[PhaseAlign] Selective: only ' + structural.length +
+        ' structural onsets (need ' + minStructuralOnsets + ') — falling back');
+      return null;
+    }
+
+    console.log('[PhaseAlign] Selective: ' + structural.length +
+      ' structural onsets from ' + onsets.length + ' total' +
+      ' (amp threshold=' + ampThreshold.toFixed(4) +
+      ', periodicity tolerance=±' + toleranceMs.toFixed(1) + 'ms)');
+    return structural;
+  }
+
   return {
     extractIntervals,
     reconstructTicks,
     findNearestTick,
     computePhaseScore,
     findOptimalPhase,
-    correctPhase
+    correctPhase,
+    selectStructuralOnsets
   };
 })();
